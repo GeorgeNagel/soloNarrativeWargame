@@ -19,11 +19,26 @@ function Index() {
     <main style={{ maxWidth: '40rem', margin: '0 auto', padding: '1rem' }}>
       <h1>Solo Narrative Wargame</h1>
       <p>Competing prototypes of the order-giving screen. Each is playable.</p>
-      <ul style={{ lineHeight: 1.6, paddingLeft: '1.2rem' }}>
+      <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
         {routes.map((route) => (
-          <li key={route.path}>
-            <a href={`#/${route.path}`}>{route.name}</a>
-            <div style={{ fontSize: '0.875rem', opacity: 0.75 }}>{route.blurb}</div>
+          <li key={route.path} style={{ margin: '0 0 0.75rem' }}>
+            <a
+              href={`#/${route.path}`}
+              style={{
+                display: 'block',
+                padding: '0.75rem 0.9rem',
+                borderRadius: '0.4rem',
+                border: '1px solid #2f2e2a',
+                background: '#1a1917',
+                color: '#e8e4da',
+                textDecoration: 'none',
+              }}
+            >
+              <strong>{route.name}</strong>
+              <div style={{ fontSize: '0.875rem', color: '#9a958a', marginTop: '0.2rem' }}>
+                {route.blurb}
+              </div>
+            </a>
           </li>
         ))}
       </ul>
@@ -43,8 +58,21 @@ function App() {
 
   return (
     <>
-      <nav style={{ padding: '0.5rem 1rem', fontSize: '0.875rem' }}>
-        <a href="#/">← All prototypes</a>
+      <nav
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.75rem',
+          padding: '0.4rem 0.75rem',
+          fontSize: '0.8125rem',
+          background: '#000',
+          borderBottom: '1px solid #2a2a28',
+        }}
+      >
+        <a href="#/" style={{ color: '#9a958a', textDecoration: 'none' }}>
+          ← All prototypes
+        </a>
+        <span style={{ color: '#55524c' }}>{route.name}</span>
       </nav>
       <Prototype />
     </>
