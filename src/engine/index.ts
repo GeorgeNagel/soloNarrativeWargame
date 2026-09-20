@@ -1,4 +1,4 @@
-export type { Hex, HexDirection } from './hex/coords'
+export type { Hex, HexDirection } from './hex/coordinates'
 export {
   HEX_DIRECTION_VECTORS,
   HEX_DIRECTIONS,
@@ -8,4 +8,4 @@ export {
   hexIsAdjacent,
   hexNeighbor,
   hexNeighbors,
-} from './hex/coords'
+} from './hex/coordinates'
