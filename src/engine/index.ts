@@ -9,3 +9,5 @@ export {
   hexNeighbor,
   hexNeighbors,
 } from './hex/coordinates'
+export type { Point } from './hex/layout'
+export { hexCorners, hexHeight, hexToPixel, hexWidth } from './hex/layout'
