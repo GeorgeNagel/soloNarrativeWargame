@@ -36,12 +36,12 @@ export const SHEET_CSS = `
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 12px 18px 8px;
+  padding: 8px 14px 6px;
   flex: none;
 }
 .sh-round {
   font-family: ${T.serif};
-  font-size: 22px;
+  font-size: 20px;
   letter-spacing: 0.04em;
   color: ${T.parchment};
 }
@@ -59,7 +59,7 @@ export const SHEET_CSS = `
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 7px 13px;
+  padding: 6px 11px;
   border-radius: 999px;
   border: 1px solid rgba(232, 192, 106, 0.32);
   background: rgba(192, 138, 36, 0.12);
@@ -79,7 +79,7 @@ export const SHEET_CSS = `
   background: rgba(249, 242, 224, 0.05);
   color: ${T.inkFaint};
   border-radius: 999px;
-  padding: 8px 12px;
+  padding: 7px 11px;
   font-size: 11px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -95,14 +95,14 @@ export const SHEET_CSS = `
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 2px 10px 8px;
+  padding: 2px 4px 4px;
   transition: padding-bottom 460ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 .sh-slab {
   position: relative;
   aspect-ratio: ${BOARD_RATIO.toFixed(4)};
-  border-radius: 22px;
-  padding: 7px;
+  border-radius: 16px;
+  padding: 4px;
   transition: width 460ms cubic-bezier(0.22, 1, 0.36, 1);
   background:
     radial-gradient(120% 120% at 20% 0%, #f2e3c4 0%, ${T.slab} 55%, #d9c49b 100%);
@@ -113,18 +113,6 @@ export const SHEET_CSS = `
 }
 .sh-slab svg { display: block; width: 100%; height: 100%; overflow: visible; }
 .sh-slab-clash { animation: sh-clash-glow 620ms ease-out; }
-.sh-caption {
-  position: absolute;
-  left: 22px; right: 22px; bottom: 14px;
-  text-align: center;
-  font-size: 12.5px;
-  line-height: 1.5;
-  color: ${T.inkFaint};
-  transition: opacity 260ms ease, transform 320ms cubic-bezier(0.22, 1, 0.36, 1);
-  pointer-events: none;
-}
-.sh-caption b { color: ${T.parchment}; font-weight: 600; }
-.sh-caption-hidden { opacity: 0; transform: translateY(12px); }
 .sh-hit { cursor: pointer; }
 
 .sh-token-shift { transition: transform 640ms cubic-bezier(0.34, 1.2, 0.5, 1); }
@@ -142,10 +130,10 @@ export const SHEET_CSS = `
 /* ---------- bottom bar ---------- */
 .sh-bar {
   flex: none;
-  padding: 8px 16px calc(12px + env(safe-area-inset-bottom, 0px));
+  padding: 6px 10px calc(10px + env(safe-area-inset-bottom, 0px));
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   transition: opacity 260ms ease, transform 320ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 .sh-bar-hidden { opacity: 0; transform: translateY(18px); pointer-events: none; }
@@ -168,7 +156,7 @@ export const SHEET_CSS = `
 }
 .sh-chip:active { transform: scale(0.97); }
 .sh-chip-body { min-width: 0; flex: 1; }
-.sh-chip b { display: block; font-size: 12.5px; letter-spacing: 0.01em; }
+.sh-chip b { display: block; font-size: 13.5px; letter-spacing: 0.01em; }
 .sh-chip em { font-style: normal; font-size: 10.5px; color: ${T.inkFaint}; }
 .sh-chip-need { border-color: rgba(232, 192, 106, 0.45); background: rgba(192, 138, 36, 0.13); }
 .sh-chip-need em { color: ${T.goldSoft}; }
@@ -201,10 +189,10 @@ export const SHEET_CSS = `
 .sh-commit {
   width: 100%;
   border: 0;
-  border-radius: 18px;
-  padding: 15px 20px;
+  border-radius: 16px;
+  padding: 13px 18px;
   font-family: ${T.serif};
-  font-size: 18px;
+  font-size: 17px;
   letter-spacing: 0.06em;
   color: #22170c;
   background: linear-gradient(180deg, #f0c063 0%, ${T.gold} 100%);
@@ -220,12 +208,6 @@ export const SHEET_CSS = `
   box-shadow: 0 0 0 1px rgba(249, 242, 224, 0.1) inset;
 }
 .sh-commit-ready { animation: sh-ready 2.6s ease-in-out infinite; }
-.sh-commit-next {
-  background: linear-gradient(180deg, #fbf1dc 0%, #e8d5ab 100%);
-  color: #4a3213;
-  box-shadow: 0 10px 20px -14px rgba(0,0,0,0.9), 0 0 0 1.5px rgba(192,138,36,0.55) inset;
-}
-
 /* ---------- sheet ---------- */
 .sh-sheet {
   position: absolute;
@@ -240,14 +222,14 @@ export const SHEET_CSS = `
   box-shadow: 0 -22px 50px -18px rgba(0, 0, 0, 0.85), 0 -1px 0 rgba(255,255,255,0.6) inset;
   display: flex;
   flex-direction: column;
-  padding: 0 18px calc(16px + env(safe-area-inset-bottom, 0px));
+  padding: 0 12px calc(12px + env(safe-area-inset-bottom, 0px));
   animation: sh-rise 400ms cubic-bezier(0.22, 1.04, 0.36, 1);
   overflow: hidden;
 }
 .sh-sheet-out { animation: sh-fall 260ms cubic-bezier(0.4, 0, 1, 1) forwards; }
 .sh-grip {
-  margin: 4px auto 0;
-  width: 84px; height: 18px;
+  margin: 3px auto 0;
+  width: 96px; height: 15px;
   border: 0; padding: 0; background: none;
   display: grid; place-items: center;
   flex: none;
@@ -262,15 +244,15 @@ export const SHEET_CSS = `
 }
 .sh-grip:active::before { background: rgba(43, 31, 22, 0.42); width: 42px; }
 /* the roster rail: all three companies, their pips, and one tap to switch */
-.sh-rail { display: flex; align-items: stretch; gap: 6px; flex: none; padding: 2px 0 2px; }
+.sh-rail { display: flex; align-items: stretch; gap: 6px; flex: none; padding: 1px 0 0; }
 .sh-rail-tab {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 5px;
-  padding: 7px 6px 8px;
+  gap: 4px;
+  padding: 8px 5px 7px;
   border-radius: 13px;
   border: 1px solid rgba(43, 31, 22, 0.14);
   background: rgba(43, 31, 22, 0.05);
@@ -280,7 +262,7 @@ export const SHEET_CSS = `
 }
 .sh-rail-tab:active { transform: scale(0.97); }
 .sh-rail-badge {
-  width: 24px; height: 24px; border-radius: 8px; flex: none;
+  width: 22px; height: 22px; border-radius: 7px; flex: none;
   display: grid; place-items: center;
   font-family: ${T.serif}; font-size: 12.5px;
   color: ${T.cream};
@@ -289,7 +271,7 @@ export const SHEET_CSS = `
 }
 .sh-rail-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .sh-rail-name {
-  font-size: 12px; font-weight: 650; letter-spacing: 0.01em;
+  font-size: 14px; font-weight: 700; letter-spacing: 0.01em;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .sh-rail-pips { display: flex; gap: 4px; flex: none; }
@@ -308,50 +290,12 @@ export const SHEET_CSS = `
 }
 .sh-rail-dead { opacity: 0.4; cursor: not-allowed; }
 
-.sh-sheet-head { display: flex; align-items: center; gap: 10px; padding: 9px 0 10px; flex: none; }
-.sh-crest {
-  width: 30px; height: 30px; border-radius: 10px; flex: none;
-  display: grid; place-items: center;
-  font-family: ${T.serif}; font-size: 13px; color: ${T.cream};
-  box-shadow: 0 5px 10px -6px rgba(0,0,0,0.6), 0 0 0 1px rgba(43,31,22,0.25);
-}
-.sh-sheet-line {
-  min-width: 0; flex: 1;
-  display: flex; align-items: baseline; flex-wrap: nowrap; gap: 8px;
-}
-.sh-sheet-title { font-family: ${T.serif}; font-size: 16.5px; line-height: 1.1; flex: none; }
-.sh-sheet-sub {
-  font-size: 10px; color: ${T.inkSoft}; letter-spacing: 0.02em;
-  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.sh-hint-line {
-  flex: none;
-  text-align: center;
-  font-size: 8.5px;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  color: ${T.inkFaint};
-  padding: 1px 0 6px;
-}
-.sh-close {
-  margin-left: auto;
-  width: 40px; height: 40px; flex: none;
-  border-radius: 14px;
-  border: 1px solid rgba(43, 31, 22, 0.16);
-  background: rgba(43, 31, 22, 0.05);
-  color: ${T.ink};
-  display: grid; place-items: center;
-  cursor: pointer;
-  transition: transform 150ms ease, background 200ms ease;
-}
-.sh-close:active { transform: scale(0.9); }
-
-.sh-slots { display: flex; gap: 9px; flex: none; }
+.sh-slots { display: flex; gap: 8px; flex: none; margin-top: 8px; }
 .sh-slot {
   flex: 1;
   position: relative;
-  min-height: 70px;
-  border-radius: 18px;
+  min-height: 62px;
+  border-radius: 16px;
   border: 2px dashed rgba(43, 31, 22, 0.2);
   background: rgba(43, 31, 22, 0.035);
   display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -390,23 +334,18 @@ export const SHEET_CSS = `
 }
 .sh-slot-x:active { transform: scale(0.88); }
 
-.sh-orders-head {
-  display: flex; align-items: baseline; gap: 8px;
-  margin: 13px 0 8px; flex: none;
-}
-.sh-orders-head span { font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase; color: ${T.inkFaint}; }
-.sh-points { margin-left: auto; font-family: ${T.serif}; font-size: 13px; color: ${T.inkSoft}; }
 .sh-orders {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: 10px;
+  gap: 8px;
   flex: none;
+  margin-top: 9px;
 }
 .sh-order {
   display: flex; align-items: center; gap: 11px;
-  min-height: 64px;
-  padding: 10px 13px;
-  border-radius: 17px;
+  min-height: 58px;
+  padding: 9px 11px;
+  border-radius: 15px;
   border: 1px solid rgba(43, 31, 22, 0.14);
   background: linear-gradient(180deg, #fffaf0 0%, #f4e8ce 100%);
   box-shadow: 0 8px 16px -12px rgba(43, 31, 22, 0.85), 0 1px 0 rgba(255,255,255,0.9) inset;
@@ -420,19 +359,19 @@ export const SHEET_CSS = `
 .sh-order:active:not(:disabled) { transform: scale(0.96) translateY(1px); box-shadow: 0 3px 8px -6px rgba(43,31,22,0.9) inset; }
 .sh-order:disabled { opacity: 0.35; cursor: not-allowed; }
 .sh-order-glyph {
-  width: 40px; height: 40px; border-radius: 12px; flex: none;
+  width: 36px; height: 36px; border-radius: 11px; flex: none;
   display: grid; place-items: center;
   background: rgba(43, 31, 22, 0.07);
 }
 .sh-order small { display: block; font-weight: 500; font-size: 10.5px; color: ${T.inkSoft}; margin-top: 1px; }
-.sh-sheet-foot { margin-top: auto; padding-top: 12px; display: flex; gap: 10px; align-items: center; flex: none; }
+.sh-sheet-foot { margin-top: auto; padding-top: 9px; display: flex; gap: 10px; align-items: center; flex: none; }
 .sh-clear {
   flex: none;
   border: 1px solid rgba(43, 31, 22, 0.18);
   background: transparent;
   color: ${T.inkSoft};
-  border-radius: 16px;
-  padding: 16px 16px;
+  border-radius: 15px;
+  padding: 14px 14px;
   font-size: 12px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -446,7 +385,7 @@ export const SHEET_CSS = `
   background: rgba(43,31,22,0.05);
   border-radius: 12px;
   padding: 11px 13px;
-  margin-top: 14px;
+  margin-top: 12px;
 }
 
 @keyframes sh-rise {
@@ -509,8 +448,6 @@ export const SHEET_CSS = `
 @media (min-width: 620px) {
   .sh-column { max-width: 820px; }
   .sh-header, .sh-bar { width: 100%; max-width: 560px; margin-left: auto; margin-right: auto; }
-  .sh-caption { left: 50%; right: auto; transform: translateX(-50%); width: min(520px, 90%); }
-  .sh-caption-hidden { opacity: 0; transform: translate(-50%, 12px); }
 }
 @media (prefers-reduced-motion: reduce) {
   .sh-root * { animation-duration: 0.01ms !important; transition-duration: 1ms !important; }

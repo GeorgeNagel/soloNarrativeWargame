@@ -355,7 +355,7 @@ export function resolveRound(units: Units, orders: OrderBook): TickFrame[] {
 const CENTERS = boardTiles().map((tile) => center(tile))
 const XS = CENTERS.map((point) => point.x)
 const YS = CENTERS.map((point) => point.y)
-const VIEW_PAD = HEX_SIZE * 0.9
+const VIEW_PAD = HEX_SIZE * 0.7
 
 /** The board's SVG viewBox, with a margin of parchment around the tiles. */
 export const BOARD_VIEW = {

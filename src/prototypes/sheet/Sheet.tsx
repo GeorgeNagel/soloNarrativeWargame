@@ -1,8 +1,8 @@
 import { forwardRef, useRef } from 'react'
 import type { ReactNode } from 'react'
 
-import { CloseGlyph, OrderGlyph } from './Glyphs'
-import { ORDER_LABEL, PIKEMEN, TICK_NUMERAL, assignedCount, directionName } from './rules'
+import { OrderGlyph } from './Glyphs'
+import { ORDER_LABEL, TICK_NUMERAL, assignedCount } from './rules'
 import type { OrderType, Slots, UnitId, UnitState } from './rules'
 import { T } from './theme'
 
@@ -64,9 +64,6 @@ const Sheet = forwardRef<HTMLDivElement, SheetProps>(function Sheet(
   ref,
 ) {
   const assigned = assignedCount(slots)
-  const remaining = PIKEMEN.movement - assigned
-  const accent = unit.side === 'player' ? T.player : T.enemy
-  const deep = unit.side === 'player' ? T.playerDeep : T.enemyDeep
   const swipe = useRef<{ x: number; y: number } | null>(null)
 
   return (
@@ -94,9 +91,8 @@ const Sheet = forwardRef<HTMLDivElement, SheetProps>(function Sheet(
         onClick={onClose}
         aria-label="Close the orders sheet"
       />
-      <div className="sh-hint-line">swipe to switch · pull down for the board</div>
 
-      {/* the roster lives inside the sheet: switch companies without losing your place */}
+      {/* the roster rail is the way in: tap a company's name to order it */}
       <div className="sh-rail" role="tablist" aria-label="Your companies">
         {roster.map((entry) => (
           <button
@@ -126,24 +122,6 @@ const Sheet = forwardRef<HTMLDivElement, SheetProps>(function Sheet(
             </span>
           </button>
         ))}
-      </div>
-
-      <div className="sh-sheet-head">
-        <div
-          className="sh-crest"
-          style={{ background: `linear-gradient(160deg, ${accent} 0%, ${deep} 100%)` }}
-        >
-          {unit.models}
-        </div>
-        <div className="sh-sheet-line">
-          <span className="sh-sheet-title">{unit.name}</span>
-          <span className="sh-sheet-sub">
-            {unit.models} models · facing {directionName(unit.dir)} · def {PIKEMEN.defense}
-          </span>
-        </div>
-        <button type="button" className="sh-close" onClick={onClose} aria-label="Back to board">
-          <CloseGlyph />
-        </button>
       </div>
 
       <div className="sh-slots">
@@ -204,34 +182,28 @@ const Sheet = forwardRef<HTMLDivElement, SheetProps>(function Sheet(
       </div>
 
       {editable ? (
-        <>
-          <div className="sh-orders-head">
-            <span>Spend a point</span>
-            <span className="sh-points">{remaining > 0 ? `${remaining} left` : 'all assigned'}</span>
-          </div>
-          <div className="sh-orders">
-            {ORDERS.map((order) => (
-              <button
-                key={order}
-                type="button"
-                className="sh-order"
-                disabled={assigned >= 3}
-                onClick={() => onPlace(order)}
-              >
-                <span className="sh-order-glyph">
-                  <OrderGlyph order={order} size={23} />
-                </span>
-                <span>
-                  {ORDER_LABEL[order]}
-                  <small>{ORDER_HINT[order]}</small>
-                </span>
-              </button>
-            ))}
-          </div>
-        </>
+        <div className="sh-orders">
+          {ORDERS.map((order) => (
+            <button
+              key={order}
+              type="button"
+              className="sh-order"
+              disabled={assigned >= 3}
+              onClick={() => onPlace(order)}
+            >
+              <span className="sh-order-glyph">
+                <OrderGlyph order={order} size={23} />
+              </span>
+              <span>
+                {ORDER_LABEL[order]}
+                <small>{ORDER_HINT[order]}</small>
+              </span>
+            </button>
+          ))}
+        </div>
       ) : (
         <div className="sh-note">
-          <b>Scouted intent.</b> This banner holds its ground for all three ticks. You cannot
+          <b>{unit.name} — scouted intent.</b> This banner holds its ground for all three ticks. You cannot
           rewrite its orders — but you can read them, and go round its flank.
         </div>
       )}
