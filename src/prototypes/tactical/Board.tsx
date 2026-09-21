@@ -374,21 +374,30 @@ function Board({
 
       {/* selected unit reticle + forward hex */}
       {selected && !playing && (
-        <g>
-          {hexCorners(px(selected.pos), S * 1.02).map((corner, i, all) => {
-            const next = all[(i + 1) % all.length]
-            const mx = corner.x + (next.x - corner.x) * 0.28
-            const my = corner.y + (next.y - corner.y) * 0.28
-            return (
-              <path
-                key={i}
-                d={`M ${mx} ${my} L ${corner.x} ${corner.y}`}
-                stroke={accentOf(selected)}
-                strokeWidth={1.6}
-                opacity={0.9}
-              />
-            )
-          })}
+        <g transform={`translate(${px(selected.pos).x} ${px(selected.pos).y})`}>
+          <circle
+            className="tc-retpulse"
+            r={S * 1.16}
+            fill="none"
+            stroke={accentOf(selected)}
+            strokeWidth={2.4}
+          />
+          <g className="tc-retspin">
+            {hexCorners({ x: 0, y: 0 }, S * 1.02).map((corner, i, all) => {
+              const next = all[(i + 1) % all.length]
+              const mx = corner.x + (next.x - corner.x) * 0.28
+              const my = corner.y + (next.y - corner.y) * 0.28
+              return (
+                <path
+                  key={i}
+                  d={`M ${mx} ${my} L ${corner.x} ${corner.y}`}
+                  stroke={accentOf(selected)}
+                  strokeWidth={1.6}
+                  opacity={0.9}
+                />
+              )
+            })}
+          </g>
         </g>
       )}
       {forward && isOnBoard(forward) && (
