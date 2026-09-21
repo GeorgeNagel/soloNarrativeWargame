@@ -328,6 +328,17 @@ export const CSS = `
   70%{opacity:1}
   100%{opacity:0;transform:translateY(-3px)}
 }
+/* Origin is the translate() the group sits at, so no transform-box needed. */
+.tc-retspin{animation:tc-retspin 9s linear infinite;transform-origin:0 0;}
+@keyframes tc-retspin{to{transform:rotate(360deg)}}
+.tc-retpulse{animation:tc-retpulse 1.9s ease-in-out infinite;transform-origin:0 0;}
+@keyframes tc-retpulse{
+  0%,100%{opacity:.5;transform:scale(1)}
+  50%{opacity:.16;transform:scale(1.1)}
+}
+@media (prefers-reduced-motion:reduce){
+  .tc-retspin,.tc-retpulse{animation:none;}
+}
 .tc-shake{animation:tc-shake 400ms ease-in-out;}
 @keyframes tc-shake{
   0%,100%{transform:translate(0,0)}
