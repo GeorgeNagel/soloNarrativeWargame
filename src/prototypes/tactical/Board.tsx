@@ -1,7 +1,7 @@
 import { hexCorners, hexHeight, hexNeighbor, hexToPixel, hexWidth } from '../../engine'
 import type { Hex, Point } from '../../engine'
 import { C } from './theme'
-import { ORDER_META, assignedPoints, hexKey, queueState } from './model'
+import { assignedPoints, hexKey, queueState } from './model'
 import type { OrderSlots, UnitState } from './model'
 import { isOnBoard } from './sim'
 import type { ClashEvent, PreviewMap, PreviewStep } from './sim'
@@ -173,9 +173,11 @@ function Token({
 }
 
 /**
- * One unit's planned path. The selected unit draws bright, with a tick badge on
- * every step and a labelled END ghost; everyone else draws thin and quiet, so
- * three queues at once stay legible instead of turning into spaghetti.
+ * One unit's planned path: a dashed trace with a node per step and a labelled
+ * END ghost. The selected unit draws bright; everyone else draws thin and
+ * quiet, so three queues at once stay legible instead of turning into
+ * spaghetti. No per-tick badges — the tick-by-tick reading lives in the
+ * console's order matrix, and the board stays a map.
  */
 function Trace({
   unit,
@@ -195,6 +197,7 @@ function Trace({
   }
   const end = steps[steps.length - 1] ?? null
   const moved = end ? end.pos.q !== unit.pos.q || end.pos.r !== unit.pos.r : false
+  const blocked = steps.find((step) => step.blocked) ?? null
 
   return (
     <g>
@@ -221,37 +224,18 @@ function Trace({
           />
         ))}
 
-      {/* badges: every tick for the selected unit, blocked ticks for the rest */}
-      {steps.map((step) => {
-        if (!step.order) return null
-        if (!lead && !step.blocked) return null
-        const p = px(step.pos)
-        const meta = ORDER_META[step.order]
-        const nudge = S * 0.5
-        const tone = step.blocked ? C.warn : accent
-        return (
-          <g key={step.tick} transform={`translate(${p.x + nudge}, ${p.y - nudge})`}>
-            <rect
-              x={-S * 0.36}
-              y={-S * 0.17}
-              width={S * 0.72}
-              height={S * 0.34}
-              fill="#061119"
-              stroke={tone}
-              strokeWidth={step.blocked ? 1.2 : 0.9}
-            />
-            <text
-              textAnchor="middle"
-              dominantBaseline="middle"
-              fontSize={S * 0.21}
-              fill={tone}
-              letterSpacing={S * 0.01}
-            >
-              {step.blocked ? `${step.tick + 1}✕` : `${step.tick + 1}${meta.code[0]}`}
-            </text>
-          </g>
-        )
-      })}
+      {/* a refused ADV still has to show, but as one quiet mark, not a badge */}
+      {blocked && (
+        <g transform={`translate(${px(blocked.pos).x + S * 0.66}, ${px(blocked.pos).y - S * 0.66})`}>
+          <path
+            d={`M ${-S * 0.13} ${-S * 0.13} L ${S * 0.13} ${S * 0.13} M ${S * 0.13} ${-S * 0.13} L ${-S * 0.13} ${S * 0.13}`}
+            stroke={C.warn}
+            strokeWidth={1.4}
+            strokeLinecap="round"
+            opacity={0.9}
+          />
+        </g>
+      )}
 
       {end && moved && (
         <g

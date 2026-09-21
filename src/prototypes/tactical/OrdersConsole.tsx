@@ -15,21 +15,6 @@ export interface SlotFocus {
   tick: number
 }
 
-/** One projected engagement, per player unit, at the end of T3. */
-export interface ForecastRow {
-  id: string
-  tag: string
-  foeTag: string
-  rangeNow: number
-  rangeEnd: number
-  contact: boolean
-  flanking: boolean
-  flanked: boolean
-  killsFoe: number
-  killsUs: number
-  blocked: boolean
-}
-
 /** One line of the resolving-tick log. */
 export interface LogRow {
   k: string
@@ -39,7 +24,6 @@ export interface LogRow {
 
 export interface ConsoleProps {
   units: UnitState[]
-  forecast: ForecastRow[]
   log: LogRow[]
   slots: Record<string, OrderSlots>
   selectedId: string | null
@@ -64,9 +48,9 @@ function accentOf(unit: UnitState): string {
 }
 
 /**
- * The matrix is the roster: six units, three ticks each, always on screen.
- * It is also the only selector you need — a cell takes control of that unit and
- * points the pad at that tick, so you never lose your place switching around.
+ * The matrix is the friendly roster: three units, three ticks each, always on
+ * screen. It is also the only selector you need — a cell takes control of that
+ * unit and points the pad at that tick, so you never lose your place.
  */
 function PlanGrid({
   units,
@@ -87,66 +71,64 @@ function PlanGrid({
   onSelect: (id: string) => void
   onFocus: (focus: SlotFocus) => void
 }) {
-  const rows = (side: UnitState['side']) =>
-    units
-      .filter((unit) => unit.side === side)
-      .map((unit) => {
-        const queue = slots[unit.id] ?? []
-        const spent = assignedPoints(queue)
-        const total = unit.stats.movement
-        const state = queueState(queue, total)
-        const ai = unit.side === 'enemy'
-        const accent = accentOf(unit)
-        return (
-          <div
-            className={`tc-mrow${unit.id === selectedId ? ' sel' : ''}${ai ? ' ai' : ''}`}
-            key={unit.id}
-            style={{ '--accent': accent } as CSSProperties}
+  const rows = units
+    .filter((unit) => unit.side === 'player')
+    .map((unit) => {
+      const queue = slots[unit.id] ?? []
+      const spent = assignedPoints(queue)
+      const total = unit.stats.movement
+      const state = queueState(queue, total)
+      const accent = accentOf(unit)
+      return (
+        <div
+          className={`tc-mrow${unit.id === selectedId ? ' sel' : ''}`}
+          key={unit.id}
+          style={{ '--accent': accent } as CSSProperties}
+        >
+          <button
+            type="button"
+            className="tc-mtag"
+            onClick={() => onSelect(unit.id)}
+            aria-label={`select ${unit.tag}`}
           >
-            <button
-              type="button"
-              className="tc-mtag"
-              onClick={() => onSelect(unit.id)}
-              aria-label={`select ${unit.tag}`}
-            >
-              <span className={`tc-dot ${state}`} />
-              {unit.tag}
-            </button>
-            {Array.from({ length: TICKS_PER_ROUND }, (_, tick) => {
-              const order = queue[tick] ?? null
-              const live = playing && tick === liveTick
-              const isFocus =
-                !ai && !playing && focus?.unitId === unit.id && focus.tick === tick
-              const classes = [
-                'tc-cell',
-                order ? 'filled' : 'none',
-                isFocus ? 'focus' : '',
-                live ? 'live' : '',
-                playing && liveTick !== null && tick < liveTick ? 'past' : '',
-              ]
-                .filter(Boolean)
-                .join(' ')
-              return (
-                <button
-                  key={tick}
-                  type="button"
-                  className={classes}
-                  disabled={ai || playing}
-                  onClick={() => onFocus({ unitId: unit.id, tick })}
-                  aria-label={`${unit.tag} tick ${tick + 1}${
-                    order ? ` ${ORDER_META[order].code}` : ' empty'
-                  }`}
-                >
-                  {order ? ORDER_META[order].code : '···'}
-                </button>
-              )
-            })}
-            <span className={`tc-mcount ${state}`}>
-              {spent}/{total}
-            </span>
-          </div>
-        )
-      })
+            <span className={`tc-dot ${state}`} />
+            {unit.tag}
+          </button>
+          {Array.from({ length: TICKS_PER_ROUND }, (_, tick) => {
+            const order = queue[tick] ?? null
+            const live = playing && tick === liveTick
+            const isFocus =
+              !playing && focus?.unitId === unit.id && focus.tick === tick
+            const classes = [
+              'tc-cell',
+              order ? 'filled' : 'none',
+              isFocus ? 'focus' : '',
+              live ? 'live' : '',
+              playing && liveTick !== null && tick < liveTick ? 'past' : '',
+            ]
+              .filter(Boolean)
+              .join(' ')
+            return (
+              <button
+                key={tick}
+                type="button"
+                className={classes}
+                disabled={playing}
+                onClick={() => onFocus({ unitId: unit.id, tick })}
+                aria-label={`${unit.tag} tick ${tick + 1}${
+                  order ? ` ${ORDER_META[order].code}` : ' empty'
+                }`}
+              >
+                {order ? ORDER_META[order].code : '···'}
+              </button>
+            )
+          })}
+          <span className={`tc-mcount ${state}`}>
+            {spent}/{total}
+          </span>
+        </div>
+      )
+    })
 
   return (
     <div className="tc-plan">
@@ -159,54 +141,7 @@ function PlanGrid({
         ))}
         <span className="tc-mcount">PTS</span>
       </div>
-      {rows('player')}
-      <div className="tc-mdiv">
-        <span>OPFOR · DOCTRINE: STAND FAST</span>
-      </div>
-      {rows('enemy')}
-    </div>
-  )
-}
-
-function Forecast({ rows }: { rows: ForecastRow[] }) {
-  if (rows.length === 0) return <div className="tc-empty">NO FRIENDLY UNITS ON FIELD</div>
-  return (
-    <div className="tc-fc">
-      <div className="tc-fcrow head">
-        <i>UNIT</i>
-        <span>RNG</span>
-        <span>ARC</span>
-        <span>FOE</span>
-        <b>±MDL</b>
-      </div>
-      {rows.map((row) => (
-        <div className={`tc-fcrow${row.contact ? ' hit' : ''}`} key={row.id}>
-          <i>
-            {row.tag}
-            {row.blocked && <em className="tc-flag">BLK</em>}
-          </i>
-          <span className={row.rangeEnd < row.rangeNow ? 'ok' : undefined}>
-            {row.rangeNow}
-            <small>→</small>
-            {row.rangeEnd}
-          </span>
-          <span className={row.flanking ? 'ok' : row.flanked ? 'hot' : undefined}>
-            {!row.contact ? '—' : row.flanking ? 'FLANK' : row.flanked ? 'REAR!' : 'FRONT'}
-          </span>
-          <span className="dim">{row.contact ? row.foeTag : '—'}</span>
-          <b>
-            {row.contact ? (
-              <>
-                <em className="ok">-{row.killsFoe}</em>
-                <small>/</small>
-                <em className="hot">-{row.killsUs}</em>
-              </>
-            ) : (
-              '—'
-            )}
-          </b>
-        </div>
-      ))}
+      {rows}
     </div>
   )
 }
@@ -411,7 +346,6 @@ function UnitCard({
 
 function OrdersConsole({
   units,
-  forecast,
   log,
   slots,
   selectedId,
@@ -429,7 +363,6 @@ function OrdersConsole({
   onClearUnit,
 }: ConsoleProps) {
   const selected = units.find((unit) => unit.id === selectedId) ?? null
-  const contacts = forecast.filter((row) => row.contact).length
   const cardRef = useRef<HTMLDivElement | null>(null)
 
   // Switching units on a phone must not leave the order pad below the fold.
@@ -458,30 +391,29 @@ function OrdersConsole({
           onFocus={onFocus}
         />
 
-        <div className="tc-sect">
-          <span>{playing ? 'Tick log' : 'Engagement forecast'}</span>
-          <span>
-            {playing
-              ? `T${(liveTick ?? 0) + 1}`
-              : `${contacts} CONTACT${contacts === 1 ? '' : 'S'} @ T3`}
-          </span>
-        </div>
-        {playing ? (
-          <div className="tc-read">
-            {log.length === 0 ? (
-              <div className="tc-empty">NO CONTACT THIS TICK</div>
-            ) : (
-              log.map((row, i) => (
-                <div className={`tc-readrow${row.tone ? ` ${row.tone}` : ''}`} key={`${row.k}-${i}`}>
-                  <i>{row.k}</i>
-                  <u />
-                  <b>{row.v}</b>
-                </div>
-              ))
-            )}
-          </div>
-        ) : (
-          <Forecast rows={forecast} />
+        {playing && (
+          <>
+            <div className="tc-sect">
+              <span>Tick log</span>
+              <span>{`T${(liveTick ?? 0) + 1}`}</span>
+            </div>
+            <div className="tc-read">
+              {log.length === 0 ? (
+                <div className="tc-empty">NO CONTACT THIS TICK</div>
+              ) : (
+                log.map((row, i) => (
+                  <div
+                    className={`tc-readrow${row.tone ? ` ${row.tone}` : ''}`}
+                    key={`${row.k}-${i}`}
+                  >
+                    <i>{row.k}</i>
+                    <u />
+                    <b>{row.v}</b>
+                  </div>
+                ))
+              )}
+            </div>
+          </>
         )}
 
         <div className="tc-sect">
