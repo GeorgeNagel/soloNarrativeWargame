@@ -5,7 +5,6 @@ import type { OrderType } from './model'
 
 const MOVE_DISTANCE = 66
 const TURN_DISTANCE = 61
-const CLOSE_DISTANCE = 66
 const HOLD_RING = 33
 
 function offset(cx: number, cy: number, degrees: number, distance: number): [number, number] {
@@ -20,7 +19,7 @@ interface ButtonProps {
   label: string
   accent: string
   rotate: number
-  glyph: OrderType | 'close'
+  glyph: OrderType
   disabled?: boolean
   /** Draw a bar across the plate: the order exists but cannot be taken. */
   strike?: boolean
@@ -83,13 +82,7 @@ function RadialButton({
         />
         <circle cx={x} cy={y} r={radius - 4.5} fill="none" stroke={accent} strokeOpacity={0.22} />
         <g transform={`translate(${x} ${y}) rotate(${rotate})`} color={accent}>
-          {glyph === 'close' ? (
-            <g stroke={accent} strokeWidth={1.9} strokeLinecap="round">
-              <path d="M-4.6 -4.6 L4.6 4.6 M4.6 -4.6 L-4.6 4.6" />
-            </g>
-          ) : (
-            <OrderGlyph type={glyph} scale={radius / 26} />
-          )}
+          <OrderGlyph type={glyph} scale={radius / 26} />
         </g>
         {caution && (
           <circle
@@ -142,13 +135,13 @@ interface RadialControlsProps {
   advance: 'open' | 'edge' | 'contested'
   exhausted: boolean
   onOrder: (order: OrderType) => void
-  onClose: () => void
 }
 
 /**
  * The order cluster blooms around the unit itself: advance sits ahead in the
  * facing direction, the wheels sit on the side they swing towards, hold sits
- * on the unit. No control panel anywhere.
+ * on the unit. No control panel anywhere, and no dismiss plate either: a tap
+ * on bare board puts the cluster away.
  */
 function RadialControls({
   cx,
@@ -160,7 +153,6 @@ function RadialControls({
   advance,
   exhausted,
   onOrder,
-  onClose,
 }: RadialControlsProps) {
   /**
    * Keep a button on the board, off a neighbouring unit and off the buttons
@@ -210,7 +202,6 @@ function RadialControls({
   const [lx, ly] = place(angle - 72, TURN_DISTANCE, 22)
   const [rx, ry] = place(angle + 72, TURN_DISTANCE, 22)
   const [hx, hy] = place(angle + 180, HOLD_RING, 18)
-  const [kx, ky] = place(angle + 180, CLOSE_DISTANCE, 14)
   const spokes: Array<[number, number, number]> = [
     [mx, my, 0],
     [lx, ly, 60],
@@ -306,17 +297,6 @@ function RadialControls({
         disabled={exhausted}
         delay={90}
         onPress={() => onOrder('right')}
-      />
-      <RadialButton
-        x={kx}
-        y={ky}
-        radius={14}
-        label="Close order cluster"
-        accent={COLORS.muted}
-        rotate={0}
-        glyph="close"
-        delay={160}
-        onPress={onClose}
       />
     </g>
   )
