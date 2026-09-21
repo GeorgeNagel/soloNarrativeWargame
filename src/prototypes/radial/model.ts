@@ -29,25 +29,38 @@ export interface UnitSnapshot {
   readonly id: string
   readonly side: Side
   readonly name: string
+  /** Short board/strip label, unique within a side. */
+  readonly sigil: string
   readonly models: number
   readonly hex: Hex
   readonly facing: HexDirection
 }
 
+/** One pairing of adjacent enemies at a tick boundary; both sides swing. */
 export interface Clash {
-  readonly attackerId: string
-  readonly defenderId: string
-  readonly attackerHex: Hex
-  readonly defenderHex: Hex
-  readonly flank: boolean
-  readonly wounds: number
-  readonly removed: number
+  readonly playerId: string
+  readonly enemyId: string
+  readonly playerHex: Hex
+  readonly enemyHex: Hex
+  readonly playerLoss: number
+  readonly enemyLoss: number
+  /** The player unit was struck through one of its three rear edges. */
+  readonly playerFlanked: boolean
+  readonly enemyFlanked: boolean
+}
+
+/** A move that failed: the unit stayed put and we can show why. */
+export interface Blocked {
+  readonly id: string
+  readonly hex: Hex
+  readonly into: Hex
+  readonly reason: 'edge' | 'occupied'
 }
 
 export interface Frame {
   readonly units: readonly UnitSnapshot[]
   readonly clashes: readonly Clash[]
-  readonly blocked: readonly string[]
+  readonly blocked: readonly Blocked[]
 }
 
 /** Rectangular 7x7 board, row by row from the top left. */
@@ -122,7 +135,7 @@ function applyTick(
   units: readonly UnitSnapshot[],
   orders: Record<string, OrderSlots>,
   tick: number,
-): { units: UnitSnapshot[]; blocked: string[] } {
+): { units: UnitSnapshot[]; blocked: Blocked[] } {
   const intents = units.map((unit) => {
     const order = orders[unit.id]?.[tick] ?? 'hold'
     if (order === 'left' || order === 'right') {
@@ -134,10 +147,12 @@ function applyTick(
     return { unit, dest: unit.hex, facing: unit.facing, moving: false }
   })
 
-  const blocked: string[] = []
+  const blocked: Blocked[] = []
   const resolved = intents.map((intent) => {
     if (!intent.moving) return intent
     const offBoard = !isOnBoard(intent.dest)
+    // Either somebody standing there, or two units stepping into the same hex
+    // at once: one unit per hex, so nobody gets in.
     const intoSomeone = intents.some(
       (other) =>
         other.unit.id !== intent.unit.id &&
@@ -145,7 +160,12 @@ function applyTick(
           (!other.moving && hexEquals(other.unit.hex, intent.dest))),
     )
     if (offBoard || intoSomeone) {
-      blocked.push(intent.unit.id)
+      blocked.push({
+        id: intent.unit.id,
+        hex: intent.unit.hex,
+        into: intent.dest,
+        reason: offBoard ? 'edge' : 'occupied',
+      })
       return { ...intent, dest: intent.unit.hex, moving: false }
     }
     return intent
@@ -157,32 +177,42 @@ function applyTick(
   }
 }
 
-/** Contact is combat: everybody adjacent at the boundary swings at once. */
+/** Prototype fudge: readable single-digit losses rather than real maths. */
+function strike(attacker: UnitSnapshot, defender: UnitSnapshot, flank: boolean): number {
+  const defense = flank ? PIKEMEN.defense / 2 : PIKEMEN.defense
+  const pressure = (PIKEMEN.attack * attacker.models) / Math.max(1, defense * defender.models)
+  return Math.max(1, Math.round(pressure * 1.6))
+}
+
+/** Contact is combat: every adjacent pair fights at the tick boundary. */
 function resolveCombat(units: readonly UnitSnapshot[]): {
   units: UnitSnapshot[]
   clashes: Clash[]
 } {
   const clashes: Clash[] = []
   const losses: Record<string, number> = {}
+  const players = units.filter((unit) => unit.side === 'player')
+  const enemies = units.filter((unit) => unit.side === 'enemy')
 
-  for (const attacker of units) {
-    for (const defender of units) {
-      if (attacker.side === defender.side) continue
-      if (!hexIsAdjacent(attacker.hex, defender.hex)) continue
-      const flank = isFlankAttack(defender, attacker.hex)
-      const defense = flank ? Math.floor(PIKEMEN.defense / 2) : PIKEMEN.defense
-      const wounds = Math.max(0, PIKEMEN.attack * attacker.models - defense * defender.models)
-      const removed = Math.floor(wounds / PIKEMEN.hp)
+  for (const player of players) {
+    for (const enemy of enemies) {
+      if (!hexIsAdjacent(player.hex, enemy.hex)) continue
+      const enemyFlanked = isFlankAttack(enemy, player.hex)
+      const playerFlanked = isFlankAttack(player, enemy.hex)
+      const enemyLoss = strike(player, enemy, enemyFlanked)
+      const playerLoss = strike(enemy, player, playerFlanked)
       clashes.push({
-        attackerId: attacker.id,
-        defenderId: defender.id,
-        attackerHex: attacker.hex,
-        defenderHex: defender.hex,
-        flank,
-        wounds,
-        removed,
+        playerId: player.id,
+        enemyId: enemy.id,
+        playerHex: player.hex,
+        enemyHex: enemy.hex,
+        playerLoss,
+        enemyLoss,
+        playerFlanked,
+        enemyFlanked,
       })
-      losses[defender.id] = (losses[defender.id] ?? 0) + removed
+      losses[enemy.id] = (losses[enemy.id] ?? 0) + enemyLoss
+      losses[player.id] = (losses[player.id] ?? 0) + playerLoss
     }
   }
 
@@ -192,7 +222,7 @@ function resolveCombat(units: readonly UnitSnapshot[]): {
       ...unit,
       models: Math.max(1, unit.models - (losses[unit.id] ?? 0)),
     })),
-    clashes: clashes.filter((clash) => clash.removed > 0),
+    clashes,
   }
 }
 
@@ -215,6 +245,7 @@ export interface RenderUnit {
   readonly id: string
   readonly side: Side
   readonly name: string
+  readonly sigil: string
   readonly models: number
   readonly x: number
   readonly y: number
@@ -251,6 +282,7 @@ export function unitsAt(frames: readonly Frame[], playhead: number): RenderUnit[
       id: unit.id,
       side: unit.side,
       name: unit.name,
+      sigil: unit.sigil,
       // Models are lost at the tick boundary, so hold the old number until then.
       models: fraction > 0.86 ? next.models : unit.models,
       x: a.x + (b.x - a.x) * eased,
@@ -263,24 +295,29 @@ export function unitsAt(frames: readonly Frame[], playhead: number): RenderUnit[
   })
 }
 
+/**
+ * Three pikemen a side on a 7x7 board, in a broken echelon rather than a
+ * straight rank. Both wing files can reach contact in a single round of
+ * straight advances; the centre file starts boxed in directly behind the
+ * right wing, so it has to wheel out or wait for the road to clear.
+ */
 export function scenarioUnits(): UnitSnapshot[] {
+  const pikes = (
+    id: string,
+    side: Side,
+    name: string,
+    sigil: string,
+    tile: Hex,
+    facing: HexDirection,
+  ): UnitSnapshot => ({ id, side, name, sigil, models: 20, hex: tile, facing })
+
   return [
-    {
-      id: 'player-pikemen',
-      side: 'player',
-      name: 'Ashford Pikes',
-      models: 20,
-      hex: hex(0, 6),
-      facing: 'NE',
-    },
-    {
-      id: 'enemy-pikemen',
-      side: 'enemy',
-      name: 'Varlet Spears',
-      models: 20,
-      hex: hex(3, 0),
-      facing: 'SW',
-    },
+    pikes('player-1', 'player', 'Ashford Pikes', 'I', hex(-1, 5), 'NE'),
+    pikes('player-2', 'player', 'Hollow Pikes', 'II', hex(1, 6), 'NE'),
+    pikes('player-3', 'player', 'Greycoat Pikes', 'III', hex(2, 5), 'NE'),
+    pikes('enemy-1', 'enemy', 'Varlet Spears', 'I', hex(2, 1), 'SW'),
+    pikes('enemy-2', 'enemy', 'Carrion Spears', 'II', hex(4, 0), 'SW'),
+    pikes('enemy-3', 'enemy', 'Blackmoor Spears', 'III', hex(5, 1), 'SW'),
   ]
 }
 
