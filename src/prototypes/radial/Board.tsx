@@ -499,7 +499,9 @@ function Board({
                 dimmed={selectedId !== null && !isSelected}
                 editable={editable}
                 showPoints={editable && unit.side === 'player'}
-                onSelect={() => onSelect(unit.id)}
+                // Tapping a file that has nothing left to spend puts the
+                // cluster away again: no dismiss plate needed.
+                onSelect={() => onSelect(isSelected && spent >= TICKS ? null : unit.id)}
                 onHold={() => onOrder('hold')}
               />
             )
@@ -525,7 +527,6 @@ function Board({
           advance={advance}
           exhausted={selectedSpent >= TICKS}
           onOrder={onOrder}
-          onClose={() => onSelect(null)}
         />
       )}
     </svg>
