@@ -113,7 +113,7 @@ function Token({
 
         <polygon
           points={poly({ x: 0, y: 0 }, S * 0.8)}
-          fill={unit.side === 'player' ? '#061c1c' : '#200906'}
+          fill={unit.side === 'player' ? '#dbe5f0' : '#f3ddd8'}
           stroke={accent}
           strokeWidth={selected ? 2 : 1.1}
           opacity={0.98}
@@ -313,7 +313,8 @@ function Board({
     >
       <defs>
         <pattern id="tc-hatch" width="6" height="6" patternUnits="userSpaceOnUse">
-          <path d="M0 6 L6 0" stroke={C.line} strokeWidth={0.8} />
+          <rect width="6" height="6" fill={C.hex} />
+          <path d="M0 6 L6 0" stroke={C.line} strokeWidth={0.7} />
         </pattern>
       </defs>
 
@@ -335,10 +336,10 @@ function Board({
         <path
           key={i}
           d={`M ${x} ${y + sy * 12} L ${x} ${y} L ${x + sx * 12} ${y}`}
-          stroke={C.plr}
+          stroke={C.lineHot}
           strokeWidth={1.4}
           fill="none"
-          opacity={0.55}
+          opacity={0.8}
         />
       ))}
 
@@ -351,7 +352,7 @@ function Board({
           <g key={hexKey(tile)}>
             <polygon
               points={poly(center, S * 0.97)}
-              fill={deployment ? 'url(#tc-hatch)' : '#0a121a'}
+              fill={deployment ? 'url(#tc-hatch)' : C.hex}
               stroke={C.line}
               strokeWidth={0.9}
             />
@@ -362,7 +363,7 @@ function Board({
                 textAnchor="middle"
                 fontSize={S * 0.2}
                 fill={C.dim}
-                opacity={0.4}
+                opacity={0.75}
               >
                 {label(tile)}
               </text>
@@ -450,7 +451,7 @@ function Board({
                 y={-S * 0.2}
                 width={S * 1.24}
                 height={S * 0.4}
-                fill="#1b1405"
+                fill="#f7e7bf"
                 stroke={C.warn}
                 strokeWidth={1}
               />
@@ -517,7 +518,7 @@ function Board({
                   /* the animation drives `transform`, so placement sits on a wrapper */
                   <g transform={`translate(${mid.x}, ${mid.y})`}>
                     <g className="tc-burst" style={delay}>
-                      <circle r={S * 0.3} fill={C.bg} opacity={0.85} />
+                      <circle r={S * 0.3} fill={C.paper} opacity={0.9} />
                       <path
                         d={`M ${-S * 0.19} ${-S * 0.19} L ${S * 0.19} ${S * 0.19} M ${S * 0.19} ${-S * 0.19} L ${-S * 0.19} ${S * 0.19}`}
                         stroke={clash.flank ? C.warn : C.bright}
@@ -539,7 +540,7 @@ function Board({
                           fontSize={S * 0.26}
                           fontWeight={700}
                           fill={C.bright}
-                          stroke={C.bg}
+                          stroke={C.paper}
                           strokeWidth={0.8}
                           paintOrder="stroke"
                         >
@@ -560,7 +561,7 @@ function Board({
                       fontSize={S * 0.42}
                       fontWeight={700}
                       fill={accentOf(defender)}
-                      stroke={C.bg}
+                      stroke={C.paper}
                       strokeWidth={0.8}
                       paintOrder="stroke"
                     >

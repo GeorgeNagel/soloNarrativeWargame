@@ -334,17 +334,20 @@ export const SHEET_CSS = `
 }
 .sh-slot-x:active { transform: scale(0.88); }
 
+/* the pad mirrors the board: wheels either side of the advance, hold beneath it */
 .sh-orders {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 8px;
   flex: none;
   margin-top: 9px;
+  margin-bottom: 4px;
 }
+.sh-order-hold { grid-column: 2; }
 .sh-order {
-  display: flex; align-items: center; gap: 11px;
-  min-height: 58px;
-  padding: 9px 11px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+  min-height: 74px;
+  padding: 9px 7px;
   border-radius: 15px;
   border: 1px solid rgba(43, 31, 22, 0.14);
   background: linear-gradient(180deg, #fffaf0 0%, #f4e8ce 100%);
@@ -352,33 +355,23 @@ export const SHEET_CSS = `
   color: ${T.ink};
   font-size: 13.5px;
   font-weight: 650;
-  text-align: left;
+  text-align: center;
   cursor: pointer;
   transition: transform 140ms ease, box-shadow 200ms ease, opacity 200ms ease;
 }
 .sh-order:active:not(:disabled) { transform: scale(0.96) translateY(1px); box-shadow: 0 3px 8px -6px rgba(43,31,22,0.9) inset; }
 .sh-order:disabled { opacity: 0.35; cursor: not-allowed; }
 .sh-order-glyph {
-  width: 36px; height: 36px; border-radius: 11px; flex: none;
+  width: 34px; height: 34px; border-radius: 11px; flex: none;
   display: grid; place-items: center;
   background: rgba(43, 31, 22, 0.07);
 }
-.sh-order small { display: block; font-weight: 500; font-size: 10.5px; color: ${T.inkSoft}; margin-top: 1px; }
-.sh-sheet-foot { margin-top: auto; padding-top: 9px; display: flex; gap: 10px; align-items: center; flex: none; }
-.sh-clear {
-  flex: none;
-  border: 1px solid rgba(43, 31, 22, 0.18);
-  background: transparent;
-  color: ${T.inkSoft};
-  border-radius: 15px;
-  padding: 14px 14px;
-  font-size: 12px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  cursor: pointer;
+.sh-order-text { display: block; line-height: 1.15; }
+.sh-order small {
+  display: block; font-weight: 500; font-size: 10px; color: ${T.inkSoft}; margin-top: 2px;
 }
-.sh-clear:disabled { opacity: 0.35; cursor: not-allowed; }
 .sh-note {
+  margin-bottom: 4px;
   font-size: 11.5px;
   color: ${T.inkSoft};
   line-height: 1.45;

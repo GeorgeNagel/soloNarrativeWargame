@@ -2,7 +2,6 @@ import { useEffect, useRef } from 'react'
 import type { CSSProperties } from 'react'
 import { C } from './theme'
 import {
-  ORDER_KINDS,
   ORDER_META,
   TICKS_PER_ROUND,
   assignedPoints,
@@ -42,6 +41,9 @@ export interface ConsoleProps {
 }
 
 const TICK_LABELS = ['T1', 'T2', 'T3']
+
+/** The pad reads like the board: wheels either side of the advance, hold below. */
+const PAD_ROW: OrderKind[] = ['left', 'move', 'right']
 
 function accentOf(unit: UnitState): string {
   return unit.side === 'player' ? C.plr : C.enm
@@ -290,11 +292,11 @@ function UnitCard({
       {!ai && (
         <>
           <div className="tc-pad">
-            {ORDER_KINDS.map((kind) => (
+            {[...PAD_ROW, 'hold' as OrderKind].map((kind) => (
               <button
                 key={kind}
                 type="button"
-                className="tc-btn"
+                className={`tc-btn${kind === 'hold' ? ' hold' : ''}`}
                 disabled={playing || !focus || focus.unitId !== unit.id}
                 onClick={() => onAdd(kind)}
                 aria-label={ORDER_META[kind].label}
