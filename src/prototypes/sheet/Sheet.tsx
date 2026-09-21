@@ -1,5 +1,4 @@
 import { forwardRef, useRef } from 'react'
-import type { ReactNode } from 'react'
 
 import { OrderGlyph } from './Glyphs'
 import { ORDER_LABEL, TICK_NUMERAL, assignedCount } from './rules'
@@ -13,7 +12,8 @@ const ORDER_HINT: Record<OrderType, string> = {
   hold: 'stand fast',
 }
 
-const ORDERS: OrderType[] = ['move', 'left', 'right', 'hold']
+/** The pad reads like the board: turns flank the advance, hold sits under it. */
+const TURN_ROW: OrderType[] = ['left', 'move', 'right']
 
 export interface RosterEntry {
   readonly id: UnitId
@@ -33,14 +33,42 @@ interface SheetProps {
   lastPlaced: { slot: number; stamp: number } | null
   /** Your three companies, always in reach without dropping the sheet. */
   roster: RosterEntry[]
-  commit: ReactNode
   onPlace: (order: OrderType) => void
   onClearSlot: (slot: number) => void
-  onClearAll: () => void
   onPickSlot: (slot: number) => void
   onSelectUnit: (id: UnitId) => void
   onCycle: (step: number) => void
   onClose: () => void
+}
+
+/** One key of the order pad: glyph over name, with the rule underneath. */
+function OrderButton({
+  order,
+  hold,
+  disabled,
+  onPlace,
+}: {
+  order: OrderType
+  hold?: boolean
+  disabled: boolean
+  onPlace: (order: OrderType) => void
+}) {
+  return (
+    <button
+      type="button"
+      className={`sh-order${hold ? ' sh-order-hold' : ''}`}
+      disabled={disabled}
+      onClick={() => onPlace(order)}
+    >
+      <span className="sh-order-glyph">
+        <OrderGlyph order={order} size={23} />
+      </span>
+      <span className="sh-order-text">
+        {ORDER_LABEL[order]}
+        <small>{ORDER_HINT[order]}</small>
+      </span>
+    </button>
+  )
 }
 
 const Sheet = forwardRef<HTMLDivElement, SheetProps>(function Sheet(
@@ -52,10 +80,8 @@ const Sheet = forwardRef<HTMLDivElement, SheetProps>(function Sheet(
     closing,
     lastPlaced,
     roster,
-    commit,
     onPlace,
     onClearSlot,
-    onClearAll,
     onPickSlot,
     onSelectUnit,
     onCycle,
@@ -183,23 +209,15 @@ const Sheet = forwardRef<HTMLDivElement, SheetProps>(function Sheet(
 
       {editable ? (
         <div className="sh-orders">
-          {ORDERS.map((order) => (
-            <button
+          {TURN_ROW.map((order) => (
+            <OrderButton
               key={order}
-              type="button"
-              className="sh-order"
+              order={order}
               disabled={assigned >= 3}
-              onClick={() => onPlace(order)}
-            >
-              <span className="sh-order-glyph">
-                <OrderGlyph order={order} size={23} />
-              </span>
-              <span>
-                {ORDER_LABEL[order]}
-                <small>{ORDER_HINT[order]}</small>
-              </span>
-            </button>
+              onPlace={onPlace}
+            />
           ))}
+          <OrderButton order="hold" hold disabled={assigned >= 3} onPlace={onPlace} />
         </div>
       ) : (
         <div className="sh-note">
@@ -207,15 +225,6 @@ const Sheet = forwardRef<HTMLDivElement, SheetProps>(function Sheet(
           rewrite its orders — but you can read them, and go round its flank.
         </div>
       )}
-
-      <div className="sh-sheet-foot">
-        {editable && (
-          <button type="button" className="sh-clear" disabled={assigned === 0} onClick={onClearAll}>
-            Clear
-          </button>
-        )}
-        <div style={{ flex: 1 }}>{commit}</div>
-      </div>
     </div>
   )
 })

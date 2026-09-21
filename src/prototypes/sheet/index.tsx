@@ -11,7 +11,6 @@ import {
   PLAYER_IDS,
   TICK_NUMERAL,
   assignedCount,
-  emptySlots,
   freshOrders,
   playerReady,
   pointsLeft,
@@ -207,12 +206,16 @@ export default function SheetPrototype() {
       const target = slots[activeSlot] === null ? activeSlot : slots.findIndex((slot) => slot === null)
       if (target === -1) return
       slots[target] = order
-      setOrders((previous) => ({ ...previous, [id]: slots }))
+      const nextOrders = { ...orders, [id]: slots }
+      setOrders(nextOrders)
       setLastPlaced({ slot: target, stamp: Date.now() })
       const next = slots.findIndex((slot) => slot === null)
       setActiveSlot(next === -1 ? target : next)
+      // The sheet has nothing left to ask for once the whole line is ordered:
+      // drop it and hand the screen back to the board and the commit bar.
+      if (playerReady(units, nextOrders)) closeSheet()
     },
-    [sheetUnit, activeSlot, orders],
+    [sheetUnit, activeSlot, orders, units, closeSheet],
   )
 
   const clearSlot = useCallback(
@@ -229,14 +232,6 @@ export default function SheetPrototype() {
     },
     [sheetUnit],
   )
-
-  const clearAll = useCallback(() => {
-    const id = sheetUnit
-    if (!id) return
-    setOrders((previous) => ({ ...previous, [id]: emptySlots() }))
-    setActiveSlot(0)
-    setLastPlaced(null)
-  }, [sheetUnit])
 
   const reset = useCallback(() => {
     run.current += 1
@@ -445,10 +440,8 @@ export default function SheetPrototype() {
             closing={closing}
             lastPlaced={lastPlaced}
             roster={roster}
-            commit={commitButton()}
             onPlace={placeOrder}
             onClearSlot={clearSlot}
-            onClearAll={clearAll}
             onPickSlot={setActiveSlot}
             onSelectUnit={showUnit}
             onCycle={cycleUnit}
