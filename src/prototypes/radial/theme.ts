@@ -52,7 +52,9 @@ export const STYLES = `
   user-select: none;
 }
 .rp-root *, .rp-root *::before, .rp-root *::after { box-sizing: border-box; }
-.rp-root button { font: inherit; color: inherit; }
+/* :where() keeps this reset at zero specificity so each button's own
+   font-size below actually wins */
+.rp-root :where(button) { font: inherit; color: inherit; }
 
 .rp-scanlines {
   position: absolute; inset: 0; pointer-events: none;
@@ -106,6 +108,9 @@ export const STYLES = `
 
 .rp-pulse { animation: rp-pulse 2.4s ease-in-out infinite; }
 @keyframes rp-pulse { 0%,100% { opacity: 0.25; } 50% { opacity: 0.8; } }
+/* untouched files breathe so six units still read at a glance */
+.rp-pulse-soft { animation: rp-pulse-soft 2.2s ease-in-out infinite; }
+@keyframes rp-pulse-soft { 0%,100% { opacity: 0.45; } 50% { opacity: 1; } }
 .rp-march { animation: rp-march 1.6s linear infinite; }
 @keyframes rp-march { to { stroke-dashoffset: -28; } }
 
@@ -116,34 +121,68 @@ export const STYLES = `
   flex: 1 1 0; min-width: 0; position: relative;
   border: 1px solid rgba(122,190,214,0.2); border-radius: 3px;
   background: linear-gradient(180deg, rgba(20,32,46,0.85), rgba(8,13,22,0.85));
-  padding: 6px 6px 7px; display: flex; flex-direction: column; align-items: center;
-  gap: 3px; cursor: pointer; transition: border-color 160ms, box-shadow 160ms;
+  padding: 5px 5px 6px; display: flex; flex-direction: column;
+  gap: 4px; transition: border-color 160ms, box-shadow 160ms;
 }
 .rp-slot.rp-focus {
   border-color: var(--rp-focus);
   box-shadow: 0 0 0 1px rgba(244,201,122,0.25), 0 0 18px -6px rgba(244,201,122,0.8);
 }
-.rp-slot.rp-past { opacity: 0.62; }
+.rp-slot.rp-past { opacity: 0.72; }
+.rp-slot-head { display: flex; align-items: center; justify-content: center; }
 .rp-slot-name {
-  font-size: 9px; letter-spacing: 0.2em; text-transform: uppercase; color: ${COLORS.muted};
+  font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: ${COLORS.muted};
+  background: none; border: 0; padding: 2px 4px; cursor: pointer; width: 100%;
+  white-space: nowrap;
 }
 .rp-slot.rp-focus .rp-slot-name { color: var(--rp-focus); }
-.rp-slot-chip {
-  display: flex; align-items: center; gap: 5px; height: 26px;
-  font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+
+/* one row per file: the whole roster's orders, one glance wide */
+.rp-rows { display: flex; flex-direction: column; gap: 3px; }
+.rp-cell {
+  position: relative; display: flex; align-items: center; gap: 4px;
+  height: 24px; padding: 0 4px; border-radius: 2px; cursor: pointer;
+  border: 1px solid transparent; background: rgba(122,190,214,0.05);
+  transition: background 140ms, border-color 140ms;
+  overflow: hidden;
 }
-.rp-slot-empty {
-  height: 26px; display: flex; align-items: center; font-size: 10px;
-  letter-spacing: 0.14em; color: rgba(214,233,242,0.22); text-transform: uppercase;
+.rp-cell:hover { background: rgba(122,190,214,0.12); }
+.rp-cell.rp-on { background: rgba(87,232,206,0.07); }
+.rp-cell.rp-sel {
+  border-color: rgba(87,232,206,0.6);
+  background: rgba(87,232,206,0.13);
+  box-shadow: 0 0 12px -5px rgba(87,232,206,0.9);
 }
-.rp-x {
-  position: absolute; top: -7px; right: -7px; width: 22px; height: 22px;
-  border-radius: 50%; border: 1px solid rgba(255,125,106,0.55);
-  background: #120a0a; color: ${COLORS.enemy}; font-size: 11px; line-height: 1;
-  display: flex; align-items: center; justify-content: center; cursor: pointer;
-  padding: 0;
+.rp-cell-sigil {
+  flex: 0 0 auto; min-width: 16px; font-size: 8.5px; letter-spacing: 0.1em;
+  color: ${COLORS.muted};
 }
-.rp-x:hover { background: #2a1210; }
+.rp-cell.rp-sel .rp-cell-sigil { color: var(--rp-player); }
+.rp-cell-glyph { display: block; color: var(--rp-player); flex: 0 0 auto; }
+.rp-cell-label {
+  display: none; font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase;
+  color: ${COLORS.text}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.rp-cell-unspent { color: rgba(214,233,242,0.28); }
+.rp-cell-dot {
+  width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto;
+  border: 1px dashed rgba(244,201,122,0.75);
+}
+.rp-cell-flag { color: ${COLORS.enemy}; font-size: 11px; line-height: 1; }
+.rp-cell-x {
+  margin-left: auto; flex: 0 0 auto; width: 19px; height: 19px;
+  border-radius: 50%; border: 1px solid rgba(122,190,214,0.22);
+  background: rgba(4,6,11,0.6); color: rgba(214,233,242,0.45);
+  font-size: 9px; line-height: 1;
+  display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0;
+  transition: color 140ms, border-color 140ms, background 140ms;
+}
+.rp-cell.rp-sel .rp-cell-x { border-color: rgba(255,125,106,0.5); color: ${COLORS.enemy}; }
+.rp-cell-x:hover { background: #2a1210; border-color: rgba(255,125,106,0.7); color: ${COLORS.enemy}; }
+.rp-slot-beat {
+  display: flex; align-items: center; justify-content: center; gap: 4px;
+  font-size: 8.5px; letter-spacing: 0.1em; text-transform: uppercase; min-height: 11px;
+}
 
 .rp-track {
   position: relative; height: 34px; touch-action: none; cursor: ew-resize;
@@ -155,6 +194,17 @@ export const STYLES = `
 }
 .rp-track-fill { position: absolute; left: 0; top: 16px; height: 1px; background: var(--rp-focus); box-shadow: 0 0 10px rgba(244,201,122,0.9); }
 .rp-notch { position: absolute; top: 12px; width: 1px; height: 9px; background: rgba(122,190,214,0.35); transform: translateX(-0.5px); }
+.rp-notch-clash {
+  position: absolute; top: 0; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 2px;
+  font-size: 8px; line-height: 1; color: var(--rp-focus);
+}
+/* the clash mark: a struck amber lozenge, used on the track and in the strip */
+.rp-beat-mark {
+  display: inline-block; width: 7px; height: 7px; flex: 0 0 auto;
+  background: var(--rp-focus); transform: rotate(45deg);
+  box-shadow: 0 0 8px rgba(244,201,122,0.85);
+}
 .rp-notch-label {
   position: absolute; top: 20px; font-size: 8.5px; letter-spacing: 0.16em;
   color: ${COLORS.muted}; transform: translateX(-50%); white-space: nowrap;
@@ -189,6 +239,12 @@ export const STYLES = `
 }
 .rp-ghostbtn:hover { border-color: rgba(122,190,214,0.7); background: rgba(122,190,214,0.07); }
 
+@media (min-width: 560px) {
+  .rp-cell { height: 27px; gap: 6px; padding: 0 6px; }
+  .rp-cell-label { display: inline; }
+  .rp-cell-sigil { min-width: 22px; font-size: 9.5px; }
+  .rp-slot-beat { font-size: 9.5px; }
+}
 @media (min-width: 720px) {
   .rp-root { padding: 16px 20px 20px; }
   .rp-timeline { max-width: 860px; width: 100%; margin: 0 auto; }

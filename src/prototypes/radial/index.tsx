@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import Board from './Board'
 import Timeline from './Timeline'
+import type { StripUnit, TickReport } from './Timeline'
 import { COLORS, STYLES } from './theme'
 import {
   TICKS,
@@ -12,9 +13,6 @@ import {
   spentPoints,
 } from './model'
 import type { OrderSlots, OrderType, Phase, UnitSnapshot } from './model'
-
-const PLAYER_ID = 'player-pikemen'
-const ENEMY_ID = 'enemy-pikemen'
 
 interface Key {
   p: number
@@ -32,13 +30,17 @@ const RESOLVE_KEYS: Key[] = [
   { p: 3, t: 3860 },
 ]
 
-function freshOrders(): Record<string, OrderSlots> {
-  // The enemy AI in this prototype simply holds.
-  return { [PLAYER_ID]: emptySlots(), [ENEMY_ID]: ['hold', 'hold', 'hold'] }
+/** The enemy AI in this prototype simply holds. */
+function freshOrders(units: readonly UnitSnapshot[]): Record<string, OrderSlots> {
+  const orders: Record<string, OrderSlots> = {}
+  for (const unit of units) {
+    orders[unit.id] = unit.side === 'player' ? emptySlots() : ['hold', 'hold', 'hold']
+  }
+  return orders
 }
 
-function firstEmpty(slots: OrderSlots, preferred: number): number {
-  if (slots[preferred] == null) return preferred
+function firstEmpty(slots: OrderSlots, preferred = 0): number {
+  if ((slots[preferred] ?? null) == null) return preferred
   const index = slots.findIndex((slot) => slot == null)
   return index === -1 ? preferred : index
 }
@@ -46,7 +48,9 @@ function firstEmpty(slots: OrderSlots, preferred: number): number {
 function RadialPrototype() {
   const [round, setRound] = useState(1)
   const [start, setStart] = useState<UnitSnapshot[]>(() => scenarioUnits())
-  const [orders, setOrders] = useState<Record<string, OrderSlots>>(() => freshOrders())
+  const [orders, setOrders] = useState<Record<string, OrderSlots>>(() =>
+    freshOrders(scenarioUnits()),
+  )
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [focusTick, setFocusTick] = useState(0)
   const [phase, setPhase] = useState<Phase>('planning')
@@ -54,6 +58,25 @@ function RadialPrototype() {
 
   const playheadRef = useRef(0)
   const raf = useRef<number | null>(null)
+  const rootRef = useRef<HTMLDivElement | null>(null)
+
+  // Fill exactly what is left under whatever shell renders us, so the board
+  // never pushes the page into a scroll on a phone.
+  useLayoutEffect(() => {
+    const fit = () => {
+      const node = rootRef.current
+      if (!node) return
+      const top = node.getBoundingClientRect().top + window.scrollY
+      node.style.height = `${Math.max(460, window.innerHeight - top)}px`
+    }
+    fit()
+    window.addEventListener('resize', fit)
+    window.addEventListener('orientationchange', fit)
+    return () => {
+      window.removeEventListener('resize', fit)
+      window.removeEventListener('orientationchange', fit)
+    }
+  }, [])
 
   const setPlayhead = useCallback((value: number) => {
     playheadRef.current = value
@@ -107,44 +130,122 @@ function RadialPrototype() {
   )
 
   const frames = useMemo(() => simulate(start, orders), [start, orders])
-  const playerSlots = orders[PLAYER_ID] ?? emptySlots()
-  const spent = spentPoints(playerSlots)
-  const ready = Object.values(orders).every(isComplete)
+  const playerUnits = useMemo(() => start.filter((unit) => unit.side === 'player'), [start])
+  const totalPoints = playerUnits.length * TICKS
+  const spent = playerUnits.reduce(
+    (total, unit) => total + spentPoints(orders[unit.id] ?? emptySlots()),
+    0,
+  )
+  const unitsReady = playerUnits.filter((unit) =>
+    isComplete(orders[unit.id] ?? emptySlots()),
+  ).length
+  // Strict gate: every file spends all three points or nothing is committed.
+  const ready = unitsReady === playerUnits.length
 
-  const losses = useMemo(
+  const strip: StripUnit[] = useMemo(
     () =>
-      frames.map((frame) =>
-        frame.clashes.reduce((total, clash) => total + clash.removed, 0),
-      ),
+      playerUnits.map((unit) => ({
+        id: unit.id,
+        sigil: unit.sigil,
+        name: unit.name,
+        slots: orders[unit.id] ?? emptySlots(),
+        blocked: Array.from({ length: TICKS }, (_, tick) =>
+          (frames[tick + 1]?.blocked ?? []).some((block) => block.id === unit.id),
+        ),
+      })),
+    [frames, orders, playerUnits],
+  )
+
+  const report: TickReport[] = useMemo(
+    () =>
+      Array.from({ length: TICKS }, (_, tick) => {
+        const clashes = frames[tick + 1]?.clashes ?? []
+        return {
+          clashes: clashes.length,
+          playerLoss: clashes.reduce((total, clash) => total + clash.playerLoss, 0),
+          enemyLoss: clashes.reduce((total, clash) => total + clash.enemyLoss, 0),
+        }
+      }),
     [frames],
+  )
+
+  /** The next file with points left, walking round the roster from `afterId`. */
+  const nextUnordered = useCallback(
+    (state: Record<string, OrderSlots>, afterId: string | null): UnitSnapshot | null => {
+      const from = afterId ? playerUnits.findIndex((unit) => unit.id === afterId) : -1
+      for (let step = 1; step <= playerUnits.length; step += 1) {
+        const unit = playerUnits[(from + step + playerUnits.length) % playerUnits.length]
+        if (!isComplete(state[unit.id] ?? emptySlots())) return unit
+      }
+      return null
+    },
+    [playerUnits],
+  )
+
+  const selectUnit = useCallback(
+    (id: string | null, tick?: number) => {
+      setSelectedId(id)
+      if (!id) return
+      const slots = orders[id] ?? emptySlots()
+      const wanted = tick ?? firstEmpty(slots)
+      if (isComplete(slots) && tick == null) {
+        setFocusTick(TICKS - 1)
+        return
+      }
+      setFocusTick(Math.min(TICKS - 1, wanted))
+      tweenTo(Math.min(TICKS, (slots[wanted] ?? null) == null ? wanted : wanted + 1))
+    },
+    [orders, tweenTo],
   )
 
   const addOrder = useCallback(
     (order: OrderType) => {
-      if (phase !== 'planning' || selectedId !== PLAYER_ID) return
-      const slots = orders[PLAYER_ID] ?? emptySlots()
+      if (phase !== 'planning' || !selectedId) return
+      const unit = playerUnits.find((candidate) => candidate.id === selectedId)
+      if (!unit) return
+      const slots = orders[selectedId] ?? emptySlots()
       if (spentPoints(slots) >= TICKS) return
       const tick = firstEmpty(slots, focusTick)
       if (slots[tick] != null) return
       const next = slots.map((slot, index) => (index === tick ? order : slot))
-      setOrders((previous) => ({ ...previous, [PLAYER_ID]: next }))
+      const updated = { ...orders, [selectedId]: next }
+      setOrders(updated)
+
+      if (isComplete(next)) {
+        // The file is done: hand the bloom to the next one that still owes
+        // points, so you never have to go hunting for it.
+        const following = nextUnordered(updated, selectedId)
+        if (following) {
+          const followingSlots = updated[following.id] ?? emptySlots()
+          const followingTick = firstEmpty(followingSlots)
+          setSelectedId(following.id)
+          setFocusTick(followingTick)
+          tweenTo(followingTick)
+        } else {
+          setSelectedId(null)
+          tweenTo(TICKS)
+        }
+        return
+      }
+
       setFocusTick(firstEmpty(next, Math.min(TICKS - 1, tick + 1)))
       tweenTo(tick + 1)
     },
-    [focusTick, orders, phase, selectedId, tweenTo],
+    [focusTick, nextUnordered, orders, phase, playerUnits, selectedId, tweenTo],
   )
 
   const removeOrder = useCallback(
-    (tick: number) => {
+    (unitId: string, tick: number) => {
       if (phase !== 'planning') return
       setOrders((previous) => {
-        const slots = previous[PLAYER_ID] ?? emptySlots()
+        const slots = previous[unitId] ?? emptySlots()
         if (slots[tick] == null) return previous
         return {
           ...previous,
-          [PLAYER_ID]: slots.map((slot, index) => (index === tick ? null : slot)),
+          [unitId]: slots.map((slot, index) => (index === tick ? null : slot)),
         }
       })
+      setSelectedId(unitId)
       setFocusTick(tick)
       tweenTo(tick)
     },
@@ -162,11 +263,27 @@ function RadialPrototype() {
 
   const focusOn = useCallback(
     (tick: number) => {
-      if (phase === 'planning') setFocusTick(tick)
       stop()
-      tweenTo(phase === 'planning' && (orders[PLAYER_ID]?.[tick] ?? null) == null ? tick : tick + 1)
+      if (phase !== 'planning') {
+        tweenTo(tick + 1)
+        return
+      }
+      setFocusTick(tick)
+      const slots = selectedId ? orders[selectedId] ?? emptySlots() : emptySlots()
+      tweenTo((slots[tick] ?? null) == null ? tick : tick + 1)
     },
-    [orders, phase, stop, tweenTo],
+    [orders, phase, selectedId, stop, tweenTo],
+  )
+
+  const pickCell = useCallback(
+    (unitId: string, tick: number) => {
+      if (phase !== 'planning') {
+        tweenTo(tick + 1)
+        return
+      }
+      selectUnit(unitId, tick)
+    },
+    [phase, selectUnit, tweenTo],
   )
 
   const commit = useCallback(() => {
@@ -185,8 +302,9 @@ function RadialPrototype() {
 
   const nextRound = useCallback(() => {
     stop()
-    setStart(frames[frames.length - 1].units.map((unit) => ({ ...unit })))
-    setOrders(freshOrders())
+    const survivors = frames[frames.length - 1].units.map((unit) => ({ ...unit }))
+    setStart(survivors)
+    setOrders(freshOrders(survivors))
     setSelectedId(null)
     setFocusTick(0)
     setPhase('planning')
@@ -198,15 +316,20 @@ function RadialPrototype() {
   const hint = (() => {
     if (phase === 'resolving') return 'resolving · drag the strip to take over'
     if (phase === 'review') return 'scrub the strip to replay the round'
-    if (!selectedUnit) return 'tap a unit to bloom its orders'
+    if (!selectedUnit) {
+      if (ready) return 'every file ordered · commit when you like'
+      const owing = playerUnits.length - unitsReady
+      return `${owing} file${owing === 1 ? '' : 's'} still owe points · tap a pulsing ring`
+    }
     const name = selectedUnit.name.toLowerCase()
-    if (selectedId === ENEMY_ID) return `${name} · locked · holds all three ticks`
-    if (spent >= TICKS) return `${name} · all points spent`
-    return `${name} · ${TICKS - spent} left · filling tick ${focusTick + 1}`
+    if (selectedUnit.side === 'enemy') return `${name} · locked · holds all three ticks`
+    const left = TICKS - spentPoints(orders[selectedUnit.id] ?? emptySlots())
+    if (left <= 0) return `${name} · ordered · tap a cell to change a tick`
+    return `${name} · ${left} left · filling tick ${focusTick + 1}`
   })()
 
   return (
-    <div className="rp-root" style={{ minHeight: '100dvh' }}>
+    <div className="rp-root" ref={rootRef} style={{ height: '100dvh' }}>
       <style>{STYLES}</style>
       <div className="rp-scanlines" />
 
@@ -216,7 +339,7 @@ function RadialPrototype() {
         </span>
         <span className="rp-phase">
           {phase === 'planning'
-            ? `${spent}/${TICKS} points assigned`
+            ? `${spent}/${totalPoints} pts · ${unitsReady}/${playerUnits.length} files`
             : phase === 'resolving'
               ? 'resolving'
               : 'resolved · replayable'}
@@ -230,20 +353,22 @@ function RadialPrototype() {
           orders={orders}
           selectedId={selectedId}
           editable={phase === 'planning'}
-          onSelect={setSelectedId}
+          onSelect={(id) => selectUnit(id)}
           onOrder={addOrder}
         />
         <div className="rp-hint">{hint}</div>
       </div>
 
       <Timeline
-        slots={playerSlots}
+        units={strip}
+        selectedId={selectedId}
         focusTick={focusTick}
         playhead={playhead}
         phase={phase}
-        losses={losses}
+        report={report}
         onScrub={scrub}
         onFocus={focusOn}
+        onPick={pickCell}
         onRemove={removeOrder}
       />
 
@@ -256,7 +381,9 @@ function RadialPrototype() {
             onClick={commit}
             aria-label="Commit orders"
           >
-            {ready ? 'Commit orders' : `Commit · ${TICKS - spent} pt${TICKS - spent === 1 ? '' : 's'} unspent`}
+            {ready
+              ? 'Commit orders'
+              : `Commit · ${totalPoints - spent} pt${totalPoints - spent === 1 ? '' : 's'} unspent`}
           </button>
         ) : (
           <>
