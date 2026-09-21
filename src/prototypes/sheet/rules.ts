@@ -1,7 +1,7 @@
 import {
   HEX_DIRECTIONS,
   hex,
-  hexDistance,
+  hexIsAdjacent,
   hexNeighbor,
   hexToPixel,
 } from '../../engine'
@@ -14,11 +14,16 @@ export const TICKS_PER_ROUND = 3
 
 export type OrderType = 'move' | 'left' | 'right' | 'hold'
 export type Slots = (OrderType | null)[]
-export type UnitId = 'player' | 'enemy'
+export type Side = 'player' | 'enemy'
+export type UnitId = 'hawk' | 'boar' | 'stag' | 'wolf' | 'raven' | 'adder'
 
 export interface UnitState {
   readonly id: UnitId
+  readonly side: Side
+  /** Full name, shown in the sheet and the roster. */
   readonly name: string
+  /** One letter, stamped on the token so six companies stay tellable apart. */
+  readonly badge: string
   readonly tile: Hex
   /** Index into HEX_DIRECTIONS. */
   readonly dir: number
@@ -28,6 +33,7 @@ export interface UnitState {
 }
 
 export type Units = Record<UnitId, UnitState>
+export type OrderBook = Record<UnitId, Slots>
 
 export const PIKEMEN = { attack: 10, defense: 8, hp: 5, movement: 3 } as const
 
@@ -61,15 +67,47 @@ export function directionName(dir: number): HexDirection {
   return HEX_DIRECTIONS[((dir % 6) + 6) % 6]
 }
 
+function pike(
+  id: UnitId,
+  side: Side,
+  name: string,
+  badge: string,
+  tile: Hex,
+  dir: number,
+): UnitState {
+  return { id, side, name, badge, tile, dir, angle: angleOf(dir), models: 20 }
+}
+
+export const PLAYER_IDS: UnitId[] = ['hawk', 'boar', 'stag']
+export const ENEMY_IDS: UnitId[] = ['adder', 'raven', 'wolf']
+export const UNIT_IDS: UnitId[] = [...PLAYER_IDS, ...ENEMY_IDS]
+
+/**
+ * Three companies a side, drawn up as a shallow wedge: the centre company of
+ * each line stands a row forward of its wings, so the lines meet unevenly.
+ */
 export const INITIAL_UNITS: Units = {
-  // Bottom row, centre column, facing up-and-right toward the enemy line.
-  player: { id: 'player', name: 'Your pikemen', tile: hex(0, 6), dir: 1, angle: angleOf(1), models: 20 },
-  // Top row, centre column, facing down-and-left toward the player.
-  enemy: { id: 'enemy', name: 'Enemy pikemen', tile: hex(3, 0), dir: 4, angle: angleOf(4), models: 20 },
+  hawk: pike('hawk', 'player', 'Hawk Company', 'H', hex(-2, 6), 1),
+  boar: pike('boar', 'player', 'Boar Company', 'B', hex(1, 5), 1),
+  stag: pike('stag', 'player', 'Stag Company', 'S', hex(2, 6), 2),
+  adder: pike('adder', 'enemy', 'Adder Banner', 'A', hex(1, 0), 5),
+  raven: pike('raven', 'enemy', 'Raven Banner', 'R', hex(3, 1), 5),
+  wolf: pike('wolf', 'enemy', 'Wolf Banner', 'W', hex(5, 0), 4),
 }
 
 export const emptySlots = (): Slots => [null, null, null]
 export const holdSlots = (): Slots => ['hold', 'hold', 'hold']
+
+export function freshOrders(): OrderBook {
+  return {
+    hawk: emptySlots(),
+    boar: emptySlots(),
+    stag: emptySlots(),
+    adder: holdSlots(),
+    raven: holdSlots(),
+    wolf: holdSlots(),
+  }
+}
 
 export function assignedCount(slots: Slots): number {
   return slots.filter((slot) => slot !== null).length
@@ -77,6 +115,28 @@ export function assignedCount(slots: Slots): number {
 
 export function slotsComplete(slots: Slots): boolean {
   return assignedCount(slots) === TICKS_PER_ROUND
+}
+
+/** A company still owes orders when it is alive and short of three points. */
+export function needsOrders(unit: UnitState, slots: Slots): boolean {
+  return unit.models > 0 && !slotsComplete(slots)
+}
+
+export function unorderedIds(units: Units, orders: OrderBook): UnitId[] {
+  return PLAYER_IDS.filter((id) => needsOrders(units[id], orders[id]))
+}
+
+/** Strict gate: every living company of yours must have spent all three points. */
+export function playerReady(units: Units, orders: OrderBook): boolean {
+  return unorderedIds(units, orders).length === 0
+}
+
+export function pointsLeft(units: Units, orders: OrderBook): number {
+  return PLAYER_IDS.reduce(
+    (total, id) =>
+      units[id].models > 0 ? total + (PIKEMEN.movement - assignedCount(orders[id])) : total,
+    0,
+  )
 }
 
 export interface StepResult {
@@ -100,6 +160,33 @@ export function applyOrder(unit: UnitState, order: OrderType, blockedTiles: Hex[
   return { unit: { ...unit, tile: target }, blocked: false }
 }
 
+interface MoveResult {
+  readonly units: Units
+  readonly blocked: UnitId[]
+}
+
+/**
+ * One tick of movement for every company at once. Orders are read in a fixed
+ * order, so a company that steps off frees its hex for the one behind it — and
+ * a company that walks into a hex still held by someone simply stalls there.
+ */
+function moveTick(units: Units, orders: OrderBook, tick: number): MoveResult {
+  const working: Units = { ...units }
+  const blocked: UnitId[] = []
+  for (const id of UNIT_IDS) {
+    const unit = working[id]
+    if (unit.models <= 0) continue
+    const order = orders[id][tick] ?? 'hold'
+    const others = UNIT_IDS.filter((other) => other !== id && working[other].models > 0).map(
+      (other) => working[other].tile,
+    )
+    const result = applyOrder(unit, order, others)
+    working[id] = result.unit
+    if (result.blocked) blocked.push(id)
+  }
+  return { units: working, blocked }
+}
+
 export interface PreviewStep {
   readonly tile: Hex
   readonly dir: number
@@ -112,26 +199,52 @@ export interface PreviewStep {
 export interface Preview {
   readonly steps: PreviewStep[]
   readonly end: UnitState
+  /** How far the company actually travels, so still paths can be dropped. */
+  readonly distance: number
+  readonly blocked: boolean
 }
 
-/** Where a unit ends up if its queued orders play out, ignoring combat. */
-export function previewOrders(unit: UnitState, slots: Slots, others: Hex[]): Preview {
-  const steps: PreviewStep[] = []
-  let current = unit
-  slots.forEach((order, index) => {
-    if (!order) return
-    const result = applyOrder(current, order, others)
-    current = result.unit
-    steps.push({
-      tile: current.tile,
-      dir: current.dir,
-      angle: current.angle,
-      order,
-      blocked: result.blocked,
-      tick: index + 1,
-    })
+/**
+ * Where every company ends up if the queued orders play out, ignoring combat.
+ * Simulated together, so one company's path blocks another's exactly as it
+ * will when the round resolves.
+ */
+export function previewAll(units: Units, orders: OrderBook): Record<UnitId, Preview> {
+  const steps = {} as Record<UnitId, PreviewStep[]>
+  UNIT_IDS.forEach((id) => {
+    steps[id] = []
   })
-  return { steps, end: current }
+  let current = units
+  for (let tick = 0; tick < TICKS_PER_ROUND; tick += 1) {
+    const result = moveTick(current, orders, tick)
+    UNIT_IDS.forEach((id) => {
+      const order = orders[id][tick]
+      if (!order || current[id].models <= 0) return
+      const unit = result.units[id]
+      steps[id].push({
+        tile: unit.tile,
+        dir: unit.dir,
+        angle: unit.angle,
+        order,
+        blocked: result.blocked.includes(id),
+        tick: tick + 1,
+      })
+    })
+    current = result.units
+  }
+  const previews = {} as Record<UnitId, Preview>
+  UNIT_IDS.forEach((id) => {
+    const walk = steps[id]
+    previews[id] = {
+      steps: walk,
+      end: current[id],
+      distance: walk.filter(
+        (step) => step.tile.q !== units[id].tile.q || step.tile.r !== units[id].tile.r,
+      ).length,
+      blocked: walk.some((step) => step.blocked),
+    }
+  })
+  return previews
 }
 
 /** True when `attacker` sits across one of the defender's three rear edges. */
@@ -141,7 +254,7 @@ export function isFlanking(attacker: UnitState, defender: UnitState): boolean {
     return neighbour.q === attacker.tile.q && neighbour.r === attacker.tile.r
   })
   if (approach < 0) return false
-  const offset = ((approach - defender.dir) % 6 + 6) % 6
+  const offset = (((approach - defender.dir) % 6) + 6) % 6
   return offset !== 0 && offset !== 1 && offset !== 5
 }
 
@@ -153,55 +266,87 @@ export interface Strike {
   readonly flank: boolean
 }
 
+export interface Clash {
+  readonly player: UnitId
+  readonly enemy: UnitId
+}
+
 export interface TickFrame {
   readonly tick: number
   readonly afterMove: Units
   readonly afterCombat: Units
   readonly strikes: Strike[]
+  readonly clashes: Clash[]
+  readonly blocked: UnitId[]
   readonly contact: boolean
 }
 
+/** Deliberately soft maths: enough bite to matter, slow enough to watch. */
 function strike(attacker: UnitState, defender: UnitState): Strike {
   const flank = isFlanking(attacker, defender)
   const defense = flank ? Math.floor(PIKEMEN.defense / 2) : PIKEMEN.defense
   const wounds = Math.max(0, PIKEMEN.attack * attacker.models - defense * defender.models)
+  const removed = wounds > 0 ? Math.max(1, Math.round(wounds / (PIKEMEN.hp * 4))) : 0
   return {
     from: attacker.id,
     to: defender.id,
     wounds,
-    removed: Math.min(defender.models, Math.floor(wounds / PIKEMEN.hp)),
+    removed: Math.min(defender.models, removed),
     flank,
   }
 }
 
+/** Every adjacent pair of opposing companies, after this tick's movement. */
+function clashesIn(units: Units): Clash[] {
+  const pairs: Clash[] = []
+  PLAYER_IDS.forEach((player) => {
+    if (units[player].models <= 0) return
+    ENEMY_IDS.forEach((enemy) => {
+      if (units[enemy].models <= 0) return
+      if (hexIsAdjacent(units[player].tile, units[enemy].tile)) pairs.push({ player, enemy })
+    })
+  })
+  return pairs
+}
+
 /** Resolve a whole round into three frames: movement, then the clash beat. */
-export function resolveRound(units: Units, orders: Record<UnitId, Slots>): TickFrame[] {
+export function resolveRound(units: Units, orders: OrderBook): TickFrame[] {
   const frames: TickFrame[] = []
   let current = units
   for (let tick = 0; tick < TICKS_PER_ROUND; tick += 1) {
-    const playerOrder = orders.player[tick] ?? 'hold'
-    const enemyOrder = orders.enemy[tick] ?? 'hold'
-    const player = current.player.models > 0
-      ? applyOrder(current.player, playerOrder, [current.enemy.tile]).unit
-      : current.player
-    const enemy = current.enemy.models > 0
-      ? applyOrder(current.enemy, enemyOrder, [current.player.tile, player.tile]).unit
-      : current.enemy
-    const afterMove: Units = { player, enemy }
+    const moved = moveTick(current, orders, tick)
+    const afterMove = moved.units
+    const clashes = clashesIn(afterMove)
 
-    const contact =
-      player.models > 0 && enemy.models > 0 && hexDistance(player.tile, enemy.tile) === 1
-    const strikes: Strike[] = contact ? [strike(player, enemy), strike(enemy, player)] : []
-    const losses: Record<UnitId, number> = { player: 0, enemy: 0 }
+    const strikes: Strike[] = []
+    clashes.forEach(({ player, enemy }) => {
+      strikes.push(strike(afterMove[player], afterMove[enemy]))
+      strikes.push(strike(afterMove[enemy], afterMove[player]))
+    })
+
+    const losses = {} as Record<UnitId, number>
+    UNIT_IDS.forEach((id) => {
+      losses[id] = 0
+    })
     strikes.forEach((item) => {
       losses[item.to] += item.removed
     })
-    const afterCombat: Units = {
-      player: { ...player, models: Math.max(0, player.models - losses.player) },
-      enemy: { ...enemy, models: Math.max(0, enemy.models - losses.enemy) },
-    }
 
-    frames.push({ tick: tick + 1, afterMove, afterCombat, strikes, contact })
+    const afterCombat = { ...afterMove } as Units
+    UNIT_IDS.forEach((id) => {
+      const unit = afterMove[id]
+      afterCombat[id] = { ...unit, models: Math.max(0, unit.models - losses[id]) }
+    })
+
+    frames.push({
+      tick: tick + 1,
+      afterMove,
+      afterCombat,
+      strikes,
+      clashes,
+      blocked: moved.blocked,
+      contact: clashes.length > 0,
+    })
     current = afterCombat
   }
   return frames

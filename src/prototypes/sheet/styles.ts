@@ -36,7 +36,7 @@ export const SHEET_CSS = `
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 16px 18px 10px;
+  padding: 12px 18px 8px;
   flex: none;
 }
 .sh-round {
@@ -95,7 +95,7 @@ export const SHEET_CSS = `
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 4px 12px 10px;
+  padding: 2px 10px 8px;
   transition: padding-bottom 460ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 .sh-slab {
@@ -133,6 +133,7 @@ export const SHEET_CSS = `
 .sh-pulse { animation: sh-pulse 1.9s ease-in-out infinite; transform-origin: center; }
 .sh-halo { animation: sh-halo 2.4s ease-in-out infinite; }
 .sh-shake { animation: sh-shake 420ms cubic-bezier(0.36, 0.07, 0.19, 0.97); }
+.sh-quiet { animation: sh-ghost-in 260ms cubic-bezier(0.22, 1, 0.36, 1); }
 .sh-burst { animation: sh-burst 620ms cubic-bezier(0.2, 0.9, 0.3, 1) forwards; }
 .sh-float { animation: sh-float 1100ms cubic-bezier(0.2, 0.8, 0.3, 1) forwards; }
 .sh-ghost-in { animation: sh-ghost-in 260ms cubic-bezier(0.22, 1, 0.36, 1); }
@@ -141,20 +142,21 @@ export const SHEET_CSS = `
 /* ---------- bottom bar ---------- */
 .sh-bar {
   flex: none;
-  padding: 10px 16px calc(16px + env(safe-area-inset-bottom, 0px));
+  padding: 8px 16px calc(12px + env(safe-area-inset-bottom, 0px));
   display: flex;
   flex-direction: column;
   gap: 10px;
   transition: opacity 260ms ease, transform 320ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 .sh-bar-hidden { opacity: 0; transform: translateY(18px); pointer-events: none; }
-.sh-chips { display: flex; gap: 8px; }
+.sh-chips { display: flex; gap: 7px; }
 .sh-chip {
   flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 10px 12px;
+  gap: 8px;
+  padding: 8px 9px;
   border-radius: 14px;
   border: 1px solid rgba(249, 242, 224, 0.12);
   background: rgba(249, 242, 224, 0.05);
@@ -165,17 +167,42 @@ export const SHEET_CSS = `
   transition: transform 160ms ease, background 200ms ease, border-color 200ms ease;
 }
 .sh-chip:active { transform: scale(0.97); }
-.sh-chip b { display: block; font-size: 13px; letter-spacing: 0.01em; }
-.sh-chip em { font-style: normal; font-size: 11px; color: ${T.inkFaint}; }
+.sh-chip-body { min-width: 0; flex: 1; }
+.sh-chip b { display: block; font-size: 12.5px; letter-spacing: 0.01em; }
+.sh-chip em { font-style: normal; font-size: 10.5px; color: ${T.inkFaint}; }
 .sh-chip-need { border-color: rgba(232, 192, 106, 0.45); background: rgba(192, 138, 36, 0.13); }
 .sh-chip-need em { color: ${T.goldSoft}; }
-.sh-swatch { width: 10px; height: 26px; border-radius: 4px; flex: none; }
+.sh-chip-badge {
+  width: 26px; height: 26px; border-radius: 9px; flex: none;
+  display: grid; place-items: center;
+  font-family: ${T.serif};
+  font-size: 13px;
+  color: ${T.cream};
+  box-shadow: 0 0 0 1px rgba(249,242,224,0.22) inset;
+}
+.sh-chip-pips { display: flex; gap: 4px; flex: none; }
+.sh-chip-pips i, .sh-rail-pips i {
+  display: block;
+  width: 6px; height: 6px; border-radius: 50%;
+  background: rgba(249, 242, 224, 0.18);
+  transition: background 200ms ease, box-shadow 200ms ease;
+}
+.sh-chip-pips i.sh-on { background: ${T.goldSoft}; box-shadow: 0 0 6px rgba(232,192,106,0.6); }
+.sh-foe {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: ${T.inkFaint};
+  padding: 0 3px;
+}
+.sh-foe-swatch { width: 8px; height: 8px; border-radius: 50%; flex: none; }
 
 .sh-commit {
   width: 100%;
   border: 0;
   border-radius: 18px;
-  padding: 19px 20px;
+  padding: 15px 20px;
   font-family: ${T.serif};
   font-size: 18px;
   letter-spacing: 0.06em;
@@ -193,13 +220,18 @@ export const SHEET_CSS = `
   box-shadow: 0 0 0 1px rgba(249, 242, 224, 0.1) inset;
 }
 .sh-commit-ready { animation: sh-ready 2.6s ease-in-out infinite; }
+.sh-commit-next {
+  background: linear-gradient(180deg, #fbf1dc 0%, #e8d5ab 100%);
+  color: #4a3213;
+  box-shadow: 0 10px 20px -14px rgba(0,0,0,0.9), 0 0 0 1.5px rgba(192,138,36,0.55) inset;
+}
 
 /* ---------- sheet ---------- */
 .sh-sheet {
   position: absolute;
   left: 0; right: 0; bottom: 0;
   min-height: var(--sheet-h);
-  max-height: 88dvh;
+  max-height: 86%;
   max-width: 560px;
   margin: 0 auto;
   border-radius: 28px 28px 0 0;
@@ -214,24 +246,97 @@ export const SHEET_CSS = `
 }
 .sh-sheet-out { animation: sh-fall 260ms cubic-bezier(0.4, 0, 1, 1) forwards; }
 .sh-grip {
-  margin: 10px auto 4px;
+  margin: 4px auto 0;
+  width: 84px; height: 18px;
+  border: 0; padding: 0; background: none;
+  display: grid; place-items: center;
+  flex: none;
+  cursor: pointer;
+}
+.sh-grip::before {
+  content: '';
+  display: block;
   width: 52px; height: 5px; border-radius: 999px;
   background: rgba(43, 31, 22, 0.22);
-  flex: none;
+  transition: background 180ms ease, width 180ms ease;
 }
-.sh-sheet-head { display: flex; align-items: center; gap: 12px; padding: 6px 0 12px; flex: none; }
-.sh-crest {
-  width: 42px; height: 42px; border-radius: 13px; flex: none;
+.sh-grip:active::before { background: rgba(43, 31, 22, 0.42); width: 42px; }
+/* the roster rail: all three companies, their pips, and one tap to switch */
+.sh-rail { display: flex; align-items: stretch; gap: 6px; flex: none; padding: 2px 0 2px; }
+.sh-rail-tab {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 6px 8px;
+  border-radius: 13px;
+  border: 1px solid rgba(43, 31, 22, 0.14);
+  background: rgba(43, 31, 22, 0.05);
+  color: ${T.inkSoft};
+  cursor: pointer;
+  transition: background 200ms ease, border-color 200ms ease, transform 150ms ease, color 200ms ease;
+}
+.sh-rail-tab:active { transform: scale(0.97); }
+.sh-rail-badge {
+  width: 24px; height: 24px; border-radius: 8px; flex: none;
   display: grid; place-items: center;
-  font-family: ${T.serif}; font-size: 17px; color: ${T.cream};
-  box-shadow: 0 6px 12px -6px rgba(0,0,0,0.6), 0 0 0 1px rgba(43,31,22,0.25);
+  font-family: ${T.serif}; font-size: 12.5px;
+  color: ${T.cream};
+  background: linear-gradient(160deg, ${T.player} 0%, ${T.playerDeep} 100%);
+  box-shadow: 0 0 0 1px rgba(43,31,22,0.2);
 }
-.sh-sheet-title { font-family: ${T.serif}; font-size: 19px; line-height: 1.15; }
-.sh-sheet-sub { font-size: 11.5px; color: ${T.inkSoft}; margin-top: 3px; letter-spacing: 0.02em; }
+.sh-rail-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.sh-rail-name {
+  font-size: 12px; font-weight: 650; letter-spacing: 0.01em;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sh-rail-pips { display: flex; gap: 4px; flex: none; }
+.sh-rail-pips i { background: rgba(43, 31, 22, 0.18); }
+.sh-rail-pips i.sh-on { background: ${T.gold}; box-shadow: 0 0 0 1px rgba(43,31,22,0.16); }
+.sh-rail-on {
+  background: linear-gradient(180deg, #fffaef 0%, #f2e5c8 100%);
+  border-color: rgba(43, 31, 22, 0.3);
+  color: ${T.ink};
+  box-shadow: 0 6px 14px -10px rgba(43,31,22,0.9), 0 1px 0 rgba(255,255,255,0.9) inset;
+}
+.sh-rail-need {
+  border-color: rgba(192, 138, 36, 0.6);
+  background: rgba(192, 138, 36, 0.12);
+  animation: sh-rail-wait 2.4s ease-in-out infinite;
+}
+.sh-rail-dead { opacity: 0.4; cursor: not-allowed; }
+
+.sh-sheet-head { display: flex; align-items: center; gap: 10px; padding: 9px 0 10px; flex: none; }
+.sh-crest {
+  width: 30px; height: 30px; border-radius: 10px; flex: none;
+  display: grid; place-items: center;
+  font-family: ${T.serif}; font-size: 13px; color: ${T.cream};
+  box-shadow: 0 5px 10px -6px rgba(0,0,0,0.6), 0 0 0 1px rgba(43,31,22,0.25);
+}
+.sh-sheet-line {
+  min-width: 0; flex: 1;
+  display: flex; align-items: baseline; flex-wrap: nowrap; gap: 8px;
+}
+.sh-sheet-title { font-family: ${T.serif}; font-size: 16.5px; line-height: 1.1; flex: none; }
+.sh-sheet-sub {
+  font-size: 10px; color: ${T.inkSoft}; letter-spacing: 0.02em;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sh-hint-line {
+  flex: none;
+  text-align: center;
+  font-size: 8.5px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: ${T.inkFaint};
+  padding: 1px 0 6px;
+}
 .sh-close {
   margin-left: auto;
-  width: 44px; height: 44px; flex: none;
-  border-radius: 50%;
+  width: 40px; height: 40px; flex: none;
+  border-radius: 14px;
   border: 1px solid rgba(43, 31, 22, 0.16);
   background: rgba(43, 31, 22, 0.05);
   color: ${T.ink};
@@ -241,17 +346,17 @@ export const SHEET_CSS = `
 }
 .sh-close:active { transform: scale(0.9); }
 
-.sh-slots { display: flex; gap: 10px; flex: none; }
+.sh-slots { display: flex; gap: 9px; flex: none; }
 .sh-slot {
   flex: 1;
   position: relative;
-  min-height: 92px;
+  min-height: 70px;
   border-radius: 18px;
   border: 2px dashed rgba(43, 31, 22, 0.2);
   background: rgba(43, 31, 22, 0.035);
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 5px;
-  padding: 8px 4px;
+  gap: 3px;
+  padding: 6px 4px;
   cursor: pointer;
   transition: transform 180ms cubic-bezier(0.34, 1.4, 0.5, 1), border-color 200ms ease, background 220ms ease, box-shadow 220ms ease;
 }
@@ -287,7 +392,7 @@ export const SHEET_CSS = `
 
 .sh-orders-head {
   display: flex; align-items: baseline; gap: 8px;
-  margin: 16px 0 9px; flex: none;
+  margin: 13px 0 8px; flex: none;
 }
 .sh-orders-head span { font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase; color: ${T.inkFaint}; }
 .sh-points { margin-left: auto; font-family: ${T.serif}; font-size: 13px; color: ${T.inkSoft}; }
@@ -327,7 +432,7 @@ export const SHEET_CSS = `
   background: transparent;
   color: ${T.inkSoft};
   border-radius: 16px;
-  padding: 18px 18px;
+  padding: 16px 16px;
   font-size: 12px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -367,6 +472,10 @@ export const SHEET_CSS = `
   50% { opacity: 0.85; }
 }
 @keyframes sh-breathe { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
+@keyframes sh-rail-wait {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(192, 138, 36, 0); }
+  50% { box-shadow: 0 0 0 3px rgba(192, 138, 36, 0.18); }
+}
 @keyframes sh-ready {
   0%, 100% { box-shadow: 0 12px 24px -12px rgba(192, 138, 36, 0.9), 0 2px 0 rgba(255,255,255,0.4) inset; }
   50% { box-shadow: 0 12px 30px -8px rgba(240, 192, 99, 0.95), 0 2px 0 rgba(255,255,255,0.55) inset; }
@@ -395,6 +504,13 @@ export const SHEET_CSS = `
 @keyframes sh-ghost-in {
   from { opacity: 0; }
   to { opacity: 1; }
+}
+/* On a wider screen the board grows but the controls stay thumb-sized. */
+@media (min-width: 620px) {
+  .sh-column { max-width: 820px; }
+  .sh-header, .sh-bar { width: 100%; max-width: 560px; margin-left: auto; margin-right: auto; }
+  .sh-caption { left: 50%; right: auto; transform: translateX(-50%); width: min(520px, 90%); }
+  .sh-caption-hidden { opacity: 0; transform: translate(-50%, 12px); }
 }
 @media (prefers-reduced-motion: reduce) {
   .sh-root * { animation-duration: 0.01ms !important; transition-duration: 1ms !important; }

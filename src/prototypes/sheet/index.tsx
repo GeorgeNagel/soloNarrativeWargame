@@ -3,30 +3,35 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import Board from './Board'
 import type { BoardFx } from './Board'
 import Sheet from './Sheet'
+import type { RosterEntry } from './Sheet'
 import {
   BOARD_RATIO,
+  ENEMY_IDS,
   INITIAL_UNITS,
-  PIKEMEN,
+  PLAYER_IDS,
   TICK_NUMERAL,
   assignedCount,
   emptySlots,
-  holdSlots,
-  previewOrders,
+  freshOrders,
+  playerReady,
+  pointsLeft,
+  previewAll,
   resolveRound,
   slotsComplete,
+  unorderedIds,
 } from './rules'
-import type { OrderType, Slots, UnitId, Units } from './rules'
+import type { OrderBook, OrderType, UnitId, Units } from './rules'
 import { SHEET_CSS } from './styles'
 import { SHEET_HEIGHT, T } from './theme'
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
-const freshOrders = (): Record<UnitId, Slots> => ({ player: emptySlots(), enemy: holdSlots() })
+const shortName = (name: string) => name.replace(/ (Company|Banner)$/, '')
 
-/** Big board, focused bottom sheet: one unit in the thumb zone at a time. */
+/** Big board, focused bottom sheet: one company in the thumb zone at a time. */
 export default function SheetPrototype() {
   const [units, setUnits] = useState<Units>(INITIAL_UNITS)
-  const [orders, setOrders] = useState<Record<UnitId, Slots>>(freshOrders)
+  const [orders, setOrders] = useState<OrderBook>(freshOrders)
   const [round, setRound] = useState(1)
   const [phase, setPhase] = useState<'planning' | 'resolving'>('planning')
 
@@ -38,10 +43,14 @@ export default function SheetPrototype() {
 
   const [tickLabel, setTickLabel] = useState<string | null>(null)
   const [fx, setFx] = useState<BoardFx | null>(null)
+  const [bumped, setBumped] = useState<UnitId[]>([])
 
   const [sheetH, setSheetH] = useState(SHEET_HEIGHT)
   const [barH, setBarH] = useState(148)
   const [boardWidth, setBoardWidth] = useState(0)
+  /** Whatever chrome sits above us (the prototype nav) is measured, not assumed. */
+  const [topInset, setTopInset] = useState(0)
+  const rootRef = useRef<HTMLDivElement | null>(null)
   const stageRef = useRef<HTMLDivElement | null>(null)
   const sheetRef = useRef<HTMLDivElement | null>(null)
   const barRef = useRef<HTMLDivElement | null>(null)
@@ -74,6 +83,17 @@ export default function SheetPrototype() {
   }, [])
 
   useLayoutEffect(() => {
+    const measureInset = () => {
+      const root = rootRef.current
+      if (!root) return
+      setTopInset(Math.max(0, Math.round(root.getBoundingClientRect().top + window.scrollY)))
+    }
+    measureInset()
+    window.addEventListener('resize', measureInset)
+    return () => window.removeEventListener('resize', measureInset)
+  }, [])
+
+  useLayoutEffect(() => {
     measureBoard()
     const stage = stageRef.current
     if (!stage) return undefined
@@ -100,15 +120,16 @@ export default function SheetPrototype() {
   }, [measureBoard, stagePadding, sheetH, barH])
 
   const planning = phase === 'planning'
-  const playerSlots = orders.player
-  const playerAssigned = assignedCount(playerSlots)
-  const remaining = PIKEMEN.movement - playerAssigned
-  const ready = units.player.models <= 0 || slotsComplete(playerSlots)
+  const ready = playerReady(units, orders)
+  const waiting = useMemo(() => unorderedIds(units, orders), [units, orders])
+  const unspent = pointsLeft(units, orders)
 
-  const preview = useMemo(() => {
-    if (!planning || selected !== 'player' || units.player.models <= 0) return null
-    return previewOrders(units.player, playerSlots, [units.enemy.tile])
-  }, [planning, selected, units, playerSlots])
+  // Every company's plan is simulated together, so blocked steps show up in the
+  // preview exactly as they will when the round runs.
+  const previews = useMemo(
+    () => previewAll(units, planning ? orders : freshOrders()),
+    [units, orders, planning],
+  )
 
   const closeSheet = useCallback(() => {
     if (!sheetUnit || closing) return
@@ -121,33 +142,71 @@ export default function SheetPrototype() {
     }, 240)
   }, [sheetUnit, closing])
 
-  const openSheet = useCallback(
+  const showUnit = useCallback(
     (id: UnitId) => {
-      if (!planning) return
       if (closeTimer.current) window.clearTimeout(closeTimer.current)
-      if (sheetUnit === id && !closing) {
-        closeSheet()
-        return
-      }
       setClosing(false)
       setSelected(id)
       setSheetUnit(id)
-      const slots = id === 'player' ? orders.player : orders.enemy
+      const slots = orders[id]
       const firstEmpty = slots.findIndex((slot) => slot === null)
       setActiveSlot(firstEmpty === -1 ? 2 : firstEmpty)
       setLastPlaced(null)
     },
-    [planning, sheetUnit, closing, orders, closeSheet],
+    [orders],
+  )
+
+  const openSheet = useCallback(
+    (id: UnitId) => {
+      if (!planning) return
+      if (sheetUnit === id && !closing) {
+        closeSheet()
+        return
+      }
+      showUnit(id)
+    },
+    [planning, sheetUnit, closing, closeSheet, showUnit],
+  )
+
+  /** Jump to the next company still owing points, wrapping round the roster. */
+  const goNextUnordered = useCallback(() => {
+    const from = sheetUnit ? PLAYER_IDS.indexOf(sheetUnit) : -1
+    for (let step = 1; step <= PLAYER_IDS.length; step += 1) {
+      const id = PLAYER_IDS[(from + step + PLAYER_IDS.length) % PLAYER_IDS.length]
+      if (units[id].models > 0 && !slotsComplete(orders[id])) {
+        showUnit(id)
+        return
+      }
+    }
+  }, [sheetUnit, units, orders, showUnit])
+
+  /** Swiping the sheet sideways walks your own line, left to right. */
+  const cycleUnit = useCallback(
+    (step: number) => {
+      const from = sheetUnit && PLAYER_IDS.includes(sheetUnit) ? PLAYER_IDS.indexOf(sheetUnit) : 0
+      for (let hop = 1; hop <= PLAYER_IDS.length; hop += 1) {
+        const id =
+          PLAYER_IDS[
+            (((from + step * hop) % PLAYER_IDS.length) + PLAYER_IDS.length) % PLAYER_IDS.length
+          ]
+        if (units[id].models > 0) {
+          showUnit(id)
+          return
+        }
+      }
+    },
+    [sheetUnit, units, showUnit],
   )
 
   const placeOrder = useCallback(
     (order: OrderType) => {
-      if (sheetUnit !== 'player') return
-      const slots = [...orders.player]
+      const id = sheetUnit
+      if (!id || !PLAYER_IDS.includes(id)) return
+      const slots = [...orders[id]]
       const target = slots[activeSlot] === null ? activeSlot : slots.findIndex((slot) => slot === null)
       if (target === -1) return
       slots[target] = order
-      setOrders((previous) => ({ ...previous, player: slots }))
+      setOrders((previous) => ({ ...previous, [id]: slots }))
       setLastPlaced({ slot: target, stamp: Date.now() })
       const next = slots.findIndex((slot) => slot === null)
       setActiveSlot(next === -1 ? target : next)
@@ -155,21 +214,28 @@ export default function SheetPrototype() {
     [sheetUnit, activeSlot, orders],
   )
 
-  const clearSlot = useCallback((slot: number) => {
-    setOrders((previous) => {
-      const slots = [...previous.player]
-      slots[slot] = null
-      return { ...previous, player: slots }
-    })
-    setActiveSlot(slot)
-    setLastPlaced(null)
-  }, [])
+  const clearSlot = useCallback(
+    (slot: number) => {
+      const id = sheetUnit
+      if (!id) return
+      setOrders((previous) => {
+        const slots = [...previous[id]]
+        slots[slot] = null
+        return { ...previous, [id]: slots }
+      })
+      setActiveSlot(slot)
+      setLastPlaced(null)
+    },
+    [sheetUnit],
+  )
 
   const clearAll = useCallback(() => {
-    setOrders((previous) => ({ ...previous, player: emptySlots() }))
+    const id = sheetUnit
+    if (!id) return
+    setOrders((previous) => ({ ...previous, [id]: emptySlots() }))
     setActiveSlot(0)
     setLastPlaced(null)
-  }, [])
+  }, [sheetUnit])
 
   const reset = useCallback(() => {
     run.current += 1
@@ -178,6 +244,7 @@ export default function SheetPrototype() {
     setRound(1)
     setPhase('planning')
     setFx(null)
+    setBumped([])
     setTickLabel(null)
     setActiveSlot(0)
     setSelected(null)
@@ -201,14 +268,17 @@ export default function SheetPrototype() {
       if (!live()) return
       setTickLabel(TICK_NUMERAL[frame.tick - 1])
       setUnits(frame.afterMove)
+      setBumped(frame.blocked)
       await sleep(820)
       if (!live()) return
+      setBumped([])
       if (frame.contact) {
-        setFx({ id: frame.tick, strikes: frame.strikes })
-        await sleep(420)
+        setFx({ id: frame.tick, strikes: frame.strikes, clashes: frame.clashes })
+        // Give each extra clash a beat of its own before the losses land.
+        await sleep(420 + frame.clashes.length * 110)
         if (!live()) return
         setUnits(frame.afterCombat)
-        await sleep(760)
+        await sleep(820)
         if (!live()) return
         setFx(null)
         await sleep(160)
@@ -226,56 +296,62 @@ export default function SheetPrototype() {
     setPhase('planning')
   }, [ready, planning, units, orders])
 
-  const commitLabel = !planning
-    ? 'Resolving the round…'
-    : ready
-      ? 'Commit orders'
-      : `${remaining} point${remaining === 1 ? '' : 's'} unspent`
+  const currentComplete = sheetUnit ? slotsComplete(orders[sheetUnit]) : false
+  const nextWaiting = waiting.find((id) => id !== sheetUnit)
 
-  const commitButton = (
-    <button
-      type="button"
-      className={`sh-commit${ready && planning ? ' sh-commit-ready' : ''}`}
-      disabled={!ready || !planning}
-      onClick={commit}
-    >
-      {commitLabel}
-    </button>
-  )
-
-  const chip = (id: UnitId) => {
-    const unit = units[id]
-    const assigned = assignedCount(orders[id])
-    const complete = assigned === 3 || unit.models <= 0
+  const commitButton = (inSheet: boolean) => {
+    // Strict gate: no commit until every living company has spent all three
+    // points. In the sheet, the same slot doubles as a jump to whoever is left.
+    if (planning && !ready && inSheet && currentComplete && nextWaiting) {
+      return (
+        <button type="button" className="sh-commit sh-commit-next" onClick={goNextUnordered}>
+          Order {shortName(units[nextWaiting].name)} ›
+        </button>
+      )
+    }
+    const label = !planning
+      ? 'Resolving the round…'
+      : ready
+        ? 'Commit orders'
+        : waiting.length > 1
+          ? `${waiting.length} companies need orders`
+          : `${unspent} point${unspent === 1 ? '' : 's'} unspent`
     return (
       <button
         type="button"
-        className={`sh-chip${complete ? '' : ' sh-chip-need'}`}
-        onClick={() => openSheet(id)}
-        disabled={!planning || unit.models <= 0}
+        className={`sh-commit${ready && planning ? ' sh-commit-ready' : ''}`}
+        disabled={!ready || !planning}
+        onClick={commit}
       >
-        <span
-          className="sh-swatch"
-          style={{ background: id === 'player' ? T.player : T.enemy }}
-        />
-        <span>
-          <b>{unit.name}</b>
-          <em>
-            {unit.models <= 0
-              ? 'routed'
-              : complete
-                ? id === 'enemy'
-                  ? 'holding · 3/3'
-                  : 'orders set · 3/3'
-                : `${assigned}/3 points · tap to order`}
-          </em>
-        </span>
+        {label}
       </button>
     )
   }
 
+  const roster: RosterEntry[] = PLAYER_IDS.map((id) => ({
+    id,
+    badge: units[id].badge,
+    name: units[id].name,
+    assigned: assignedCount(orders[id]),
+    alive: units[id].models > 0,
+    active: sheetUnit === id,
+  }))
+
+  const clashLine = fx
+    ? fx.clashes
+        .map(
+          (clash) =>
+            `${shortName(units[clash.player].name)} × ${shortName(units[clash.enemy].name)}`,
+        )
+        .join(' · ')
+    : null
+
   return (
-    <div className="sh-root">
+    <div
+      ref={rootRef}
+      className="sh-root"
+      style={topInset ? { height: `calc(100dvh - ${topInset}px)`, maxHeight: `calc(100dvh - ${topInset}px)` } : undefined}
+    >
       <style>{SHEET_CSS}</style>
       <div className="sh-column">
         <header className="sh-header">
@@ -285,7 +361,11 @@ export default function SheetPrototype() {
           </div>
           <div className="sh-phase">
             <span className="sh-dot" />
-            {planning ? 'Orders' : `Tick ${tickLabel ?? TICK_NUMERAL[0]}`}
+            {planning
+              ? ready
+                ? 'Ready'
+                : `${waiting.length} to order`
+              : `Tick ${tickLabel ?? TICK_NUMERAL[0]}`}
           </div>
           <button type="button" className="sh-reset" onClick={reset}>
             Reset
@@ -297,9 +377,10 @@ export default function SheetPrototype() {
             units={units}
             orders={orders}
             selected={selected}
-            preview={preview}
+            previews={previews}
             planning={planning}
             fx={fx}
+            bumped={bumped}
             width={boardWidth}
             onSelect={openSheet}
             onBackdrop={closeSheet}
@@ -307,9 +388,14 @@ export default function SheetPrototype() {
           <p className={`sh-caption${sheetUnit ? ' sh-caption-hidden' : ''}`}>
             {planning ? (
               <>
-                Two companies of pikemen, three ticks to the round.
+                Three companies a side, three ticks to the round.
                 <br />
-                <b>Tap a unit</b> to spend its movement points.
+                <b>Tap a company</b> — gold rings mark the ones still waiting.
+              </>
+            ) : clashLine ? (
+              <>
+                Tick <b>{tickLabel}</b> — {fx && fx.clashes.length > 1 ? 'spears lock at ' : ''}
+                <b>{clashLine}</b>
               </>
             ) : (
               <>
@@ -321,10 +407,40 @@ export default function SheetPrototype() {
 
         <div ref={barRef} className={`sh-bar${sheetUnit ? ' sh-bar-hidden' : ''}`}>
           <div className="sh-chips">
-            {chip('player')}
-            {chip('enemy')}
+            {PLAYER_IDS.map((id) => {
+              const unit = units[id]
+              const assigned = assignedCount(orders[id])
+              const done = assigned === 3 || unit.models <= 0
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  className={`sh-chip${done ? '' : ' sh-chip-need'}`}
+                  onClick={() => openSheet(id)}
+                  disabled={!planning || unit.models <= 0}
+                >
+                  <span className="sh-chip-badge" style={{ background: T.player }}>
+                    {unit.badge}
+                  </span>
+                  <span className="sh-chip-body">
+                    <b>{shortName(unit.name)}</b>
+                    <em>{unit.models <= 0 ? 'routed' : done ? 'ordered' : `${assigned}/3`}</em>
+                  </span>
+                  <span className="sh-chip-pips">
+                    {[0, 1, 2].map((pip) => (
+                      <i key={pip} className={pip < assigned ? 'sh-on' : undefined} />
+                    ))}
+                  </span>
+                </button>
+              )
+            })}
           </div>
-          {commitButton}
+          <div className="sh-foe">
+            <span className="sh-foe-swatch" style={{ background: T.enemy }} />
+            {ENEMY_IDS.filter((id) => units[id].models > 0).length} enemy banners ·{' '}
+            {ENEMY_IDS.reduce((total, id) => total + units[id].models, 0)} models · holding
+          </div>
+          {commitButton(false)}
         </div>
 
         {sheetUnit && (
@@ -333,14 +449,17 @@ export default function SheetPrototype() {
             unit={units[sheetUnit]}
             slots={orders[sheetUnit]}
             activeSlot={activeSlot}
-            editable={sheetUnit === 'player'}
+            editable={units[sheetUnit].side === 'player'}
             closing={closing}
             lastPlaced={lastPlaced}
-            commit={commitButton}
+            roster={roster}
+            commit={commitButton(true)}
             onPlace={placeOrder}
             onClearSlot={clearSlot}
             onClearAll={clearAll}
             onPickSlot={setActiveSlot}
+            onSelectUnit={showUnit}
+            onCycle={cycleUnit}
             onClose={closeSheet}
           />
         )}
