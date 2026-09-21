@@ -1,13 +1,15 @@
 import { hexCorners, hexHeight, hexNeighbor, hexToPixel, hexWidth } from '../../engine'
 import type { Hex, Point } from '../../engine'
 import { C } from './theme'
-import { ORDER_META, hexKey } from './model'
+import { ORDER_META, assignedPoints, hexKey, queueState } from './model'
 import type { OrderSlots, UnitState } from './model'
 import { isOnBoard } from './sim'
-import type { ClashEvent, PreviewStep } from './sim'
+import type { ClashEvent, PreviewMap, PreviewStep } from './sim'
 
 const S = 30
 const MARGIN = 7
+/** Matches the console's clash stagger: one beat per melee in the tick. */
+const CLASH_STAGGER_MS = 260
 
 const FILES = 'ABCDEFG'
 
@@ -44,10 +46,11 @@ export interface BoardProps {
   units: UnitState[]
   selectedId: string | null
   onSelect: (id: string) => void
-  preview: PreviewStep[] | null
-  previewUnit: UnitState | null
+  /** Joint dry-run of every queue; null while a round is resolving. */
+  previews: PreviewMap | null
   slots: Record<string, OrderSlots>
   clashes: ClashEvent[]
+  blockedIds: string[]
   showClash: boolean
   beatKey: number
   playing: boolean
@@ -62,6 +65,7 @@ function Token({
   accent,
   selected,
   filled,
+  ring,
   playing,
   onSelect,
   hit,
@@ -70,6 +74,7 @@ function Token({
   accent: string
   selected: boolean
   filled: number
+  ring: 'empty' | 'part' | null
   playing: boolean
   onSelect: (id: string) => void
   hit: boolean
@@ -89,15 +94,21 @@ function Token({
       aria-label={`${unit.tag}, ${unit.models} models`}
     >
       <g className={hit ? 'tc-shake' : undefined}>
+        {/* unordered / part-ordered units wear an amber hex until their queue is full */}
+        {ring && (
+          <polygon
+            points={poly({ x: 0, y: 0 }, S * 0.97)}
+            fill="none"
+            stroke={C.warn}
+            strokeWidth={1.3}
+            strokeDasharray={ring === 'empty' ? '2 4' : '7 4'}
+            opacity={0.85}
+          />
+        )}
+
         <g className="tc-rot" style={{ transform: `rotate(${unit.angle}deg)` }}>
           <path d={WEDGE} fill={accent} opacity={0.95} />
-          <path
-            d={FRONT_ARC}
-            fill="none"
-            stroke={accent}
-            strokeWidth={1.6}
-            opacity={0.5}
-          />
+          <path d={FRONT_ARC} fill="none" stroke={accent} strokeWidth={1.6} opacity={0.5} />
         </g>
 
         <polygon
@@ -107,13 +118,7 @@ function Token({
           strokeWidth={selected ? 2 : 1.1}
           opacity={0.98}
         />
-        <circle
-          r={ringR}
-          fill="none"
-          stroke={C.line}
-          strokeWidth={2.2}
-          opacity={0.9}
-        />
+        <circle r={ringR} fill="none" stroke={C.line} strokeWidth={2.2} opacity={0.9} />
         <circle
           r={ringR}
           fill="none"
@@ -167,15 +172,129 @@ function Token({
   )
 }
 
+/**
+ * One unit's planned path. The selected unit draws bright, with a tick badge on
+ * every step and a labelled END ghost; everyone else draws thin and quiet, so
+ * three queues at once stay legible instead of turning into spaghetti.
+ */
+function Trace({
+  unit,
+  steps,
+  lead,
+}: {
+  unit: UnitState
+  steps: PreviewStep[]
+  lead: boolean
+}) {
+  const accent = accentOf(unit)
+  const points: Point[] = [px(unit.pos)]
+  for (const step of steps) {
+    const p = px(step.pos)
+    const last = points[points.length - 1]
+    if (last.x !== p.x || last.y !== p.y) points.push(p)
+  }
+  const end = steps[steps.length - 1] ?? null
+  const moved = end ? end.pos.q !== unit.pos.q || end.pos.r !== unit.pos.r : false
+
+  return (
+    <g>
+      {points.length > 1 && (
+        <polyline
+          points={points.map((p) => `${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' ')}
+          fill="none"
+          stroke={accent}
+          strokeWidth={lead ? 2 : 1.1}
+          strokeDasharray={lead ? '5 4' : '2 5'}
+          opacity={lead ? 0.85 : 0.4}
+        />
+      )}
+
+      {points.length > 1 &&
+        points.slice(1).map((p, i) => (
+          <circle
+            key={`node-${i}`}
+            cx={p.x}
+            cy={p.y}
+            r={lead ? 2.4 : 1.6}
+            fill={accent}
+            opacity={lead ? 0.85 : 0.4}
+          />
+        ))}
+
+      {/* badges: every tick for the selected unit, blocked ticks for the rest */}
+      {steps.map((step) => {
+        if (!step.order) return null
+        if (!lead && !step.blocked) return null
+        const p = px(step.pos)
+        const meta = ORDER_META[step.order]
+        const nudge = S * 0.5
+        const tone = step.blocked ? C.warn : accent
+        return (
+          <g key={step.tick} transform={`translate(${p.x + nudge}, ${p.y - nudge})`}>
+            <rect
+              x={-S * 0.36}
+              y={-S * 0.17}
+              width={S * 0.72}
+              height={S * 0.34}
+              fill="#061119"
+              stroke={tone}
+              strokeWidth={step.blocked ? 1.2 : 0.9}
+            />
+            <text
+              textAnchor="middle"
+              dominantBaseline="middle"
+              fontSize={S * 0.21}
+              fill={tone}
+              letterSpacing={S * 0.01}
+            >
+              {step.blocked ? `${step.tick + 1}✕` : `${step.tick + 1}${meta.code[0]}`}
+            </text>
+          </g>
+        )
+      })}
+
+      {end && moved && (
+        <g
+          transform={`translate(${px(end.pos).x}, ${px(end.pos).y})`}
+          opacity={lead ? 0.6 : 0.34}
+        >
+          <polygon
+            points={poly({ x: 0, y: 0 }, S * 0.8)}
+            fill="none"
+            stroke={accent}
+            strokeWidth={lead ? 1.2 : 1}
+            strokeDasharray="4 3"
+          />
+          <g style={{ transform: `rotate(${end.angle}deg)` }}>
+            <path d={WEDGE} fill="none" stroke={accent} strokeWidth={1.2} />
+          </g>
+          {/* the label sits low in the ghost so the facing wedge stays clear of it */}
+          <text
+            textAnchor="middle"
+            dominantBaseline="middle"
+            y={S * 0.46}
+            fontSize={lead ? S * 0.26 : S * 0.21}
+            fontWeight={700}
+            fill={accent}
+            letterSpacing={S * 0.05}
+          >
+            {lead ? 'END' : unit.tag}
+          </text>
+        </g>
+      )}
+    </g>
+  )
+}
+
 function Board({
   tiles,
   units,
   selectedId,
   onSelect,
-  preview,
-  previewUnit,
+  previews,
   slots,
   clashes,
+  blockedIds,
   showClash,
   beatKey,
   playing,
@@ -188,26 +307,18 @@ function Board({
 
   const occupied = new Map(units.map((unit) => [hexKey(unit.pos), unit]))
   const selected = units.find((unit) => unit.id === selectedId) ?? null
-  const hitIds = new Set(showClash ? clashes.filter((c) => c.kills > 0).map((c) => c.defenderId) : [])
-
-  // Trace: distinct positions the previewed unit passes through.
-  const tracePoints: Point[] = []
-  if (preview && previewUnit) {
-    tracePoints.push(px(previewUnit.pos))
-    for (const step of preview) {
-      const p = px(step.pos)
-      const last = tracePoints[tracePoints.length - 1]
-      if (last.x !== p.x || last.y !== p.y) tracePoints.push(p)
-    }
-  }
-  const ghost = preview && preview.length > 0 ? preview[preview.length - 1] : null
-  const ghostAccent = previewUnit ? accentOf(previewUnit) : C.plr
-  const ghostMoved =
-    ghost && previewUnit
-      ? ghost.pos.q !== previewUnit.pos.q || ghost.pos.r !== previewUnit.pos.r
-      : false
+  const hitIds = new Set(
+    showClash ? clashes.filter((c) => c.kills > 0).map((c) => c.defenderId) : [],
+  )
 
   const forward = selected && !playing ? hexNeighbor(selected.pos, selected.facing) : null
+
+  // One beat per contacting pair, numbered to match the console's tick log.
+  const pairIndex = new Map<string, number>()
+  for (const clash of clashes) {
+    const key = [clash.attackerId, clash.defenderId].sort().join('|')
+    if (!pairIndex.has(key)) pairIndex.set(key, pairIndex.size)
+  }
 
   return (
     <svg
@@ -306,92 +417,74 @@ function Board({
         />
       )}
 
-      {/* preview trace */}
-      {tracePoints.length > 1 && (
-        <polyline
-          points={tracePoints.map((p) => `${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' ')}
-          fill="none"
-          stroke={ghostAccent}
-          strokeWidth={1.6}
-          strokeDasharray="5 4"
-          opacity={0.75}
-        />
-      )}
+      {/* every queued path at once — quiet ones first, the selected one on top */}
+      {previews &&
+        [...units]
+          .sort((a, b) => Number(a.id === selectedId) - Number(b.id === selectedId))
+          .map((unit) => {
+            const steps = previews[unit.id] ?? []
+            if (steps.every((step) => !step.order)) return null
+            return (
+              <Trace
+                key={`trace-${unit.id}`}
+                unit={unit}
+                steps={steps}
+                lead={unit.id === selectedId}
+              />
+            )
+          })}
 
-      {/* per-tick preview badges */}
-      {preview &&
-        previewUnit &&
-        preview.map((step) => {
-          if (!step.order) return null
-          const p = px(step.pos)
-          const meta = ORDER_META[step.order]
-          const nudge = S * 0.5
-          return (
-            <g key={step.tick} transform={`translate(${p.x + nudge}, ${p.y - nudge})`}>
+      {/* units */}
+      {units.map((unit) => {
+        const queue = slots[unit.id] ?? []
+        const state = queueState(queue, unit.stats.movement)
+        return (
+          <Token
+            key={unit.id}
+            unit={unit}
+            accent={accentOf(unit)}
+            selected={unit.id === selectedId}
+            filled={assignedPoints(queue)}
+            ring={!playing && unit.side === 'player' && state !== 'armed' ? state : null}
+            playing={playing}
+            onSelect={onSelect}
+            hit={hitIds.has(unit.id)}
+          />
+        )
+      })}
+
+      {/* a refused ADV, called out where it happened */}
+      {blockedIds.map((id) => {
+        const unit = units.find((candidate) => candidate.id === id)
+        if (!unit) return null
+        const p = px(unit.pos)
+        return (
+          <g key={`blocked-${id}`} transform={`translate(${p.x}, ${p.y - S * 0.98})`}>
+            <g className="tc-blocked">
               <rect
-                x={-S * 0.36}
-                y={-S * 0.17}
-                width={S * 0.72}
-                height={S * 0.34}
-                fill="#061119"
-                stroke={step.blocked ? C.warn : ghostAccent}
-                strokeWidth={0.9}
+                x={-S * 0.62}
+                y={-S * 0.2}
+                width={S * 1.24}
+                height={S * 0.4}
+                fill="#1b1405"
+                stroke={C.warn}
+                strokeWidth={1}
               />
               <text
                 textAnchor="middle"
                 dominantBaseline="middle"
-                fontSize={S * 0.21}
-                fill={step.blocked ? C.warn : ghostAccent}
-                letterSpacing={S * 0.01}
+                fontSize={S * 0.22}
+                fill={C.warn}
+                letterSpacing={S * 0.03}
               >
-                {`${step.tick + 1}${meta.code[0]}`}
+                BLOCKED
               </text>
             </g>
-          )
-        })}
-
-      {/* ghost end position */}
-      {ghost && previewUnit && ghostMoved && (
-        <g transform={`translate(${px(ghost.pos).x}, ${px(ghost.pos).y})`} opacity={0.55}>
-          <polygon
-            points={poly({ x: 0, y: 0 }, S * 0.8)}
-            fill="none"
-            stroke={ghostAccent}
-            strokeWidth={1.2}
-            strokeDasharray="4 3"
-          />
-          <g style={{ transform: `rotate(${ghost.angle}deg)` }}>
-            <path d={WEDGE} fill="none" stroke={ghostAccent} strokeWidth={1.2} />
           </g>
-          <text
-            textAnchor="middle"
-            dominantBaseline="middle"
-            y={S * 0.04}
-            fontSize={S * 0.28}
-            fontWeight={700}
-            fill={ghostAccent}
-            letterSpacing={S * 0.05}
-          >
-            END
-          </text>
-        </g>
-      )}
+        )
+      })}
 
-      {/* units */}
-      {units.map((unit) => (
-        <Token
-          key={unit.id}
-          unit={unit}
-          accent={accentOf(unit)}
-          selected={unit.id === selectedId}
-          filled={(slots[unit.id] ?? []).filter(Boolean).length}
-          playing={playing}
-          onSelect={onSelect}
-          hit={hitIds.has(unit.id)}
-        />
-      ))}
-
-      {/* tick-boundary contact scan + clash beat */}
+      {/* tick-boundary contact scan + clash beats */}
       {showClash && (
         <g key={beatKey} pointerEvents="none">
           {units.map((unit) => (
@@ -419,10 +512,12 @@ function Board({
             const edge = sharedEdge(a, d)
             const rises = defender.pos.r > 1
             const away = d.x >= a.x ? 1 : -1
+            const order = pairIndex.get([clash.attackerId, clash.defenderId].sort().join('|')) ?? 0
+            const delay = { animationDelay: `${order * CLASH_STAGGER_MS}ms` }
             return (
               <g key={`clash-${i}`}>
                 {first && edge && (
-                  <g className="tc-edge">
+                  <g className="tc-edge" style={delay}>
                     <line
                       x1={edge[0].x}
                       y1={edge[0].y}
@@ -437,7 +532,7 @@ function Board({
                 {first && (
                   /* the animation drives `transform`, so placement sits on a wrapper */
                   <g transform={`translate(${mid.x}, ${mid.y})`}>
-                    <g className="tc-burst">
+                    <g className="tc-burst" style={delay}>
                       <circle r={S * 0.3} fill={C.bg} opacity={0.85} />
                       <path
                         d={`M ${-S * 0.19} ${-S * 0.19} L ${S * 0.19} ${S * 0.19} M ${S * 0.19} ${-S * 0.19} L ${-S * 0.19} ${S * 0.19}`}
@@ -451,6 +546,22 @@ function Board({
                         strokeWidth={1}
                         opacity={0.85}
                       />
+                      {pairIndex.size > 1 && (
+                        <text
+                          x={S * 0.42}
+                          y={-S * 0.3}
+                          textAnchor="middle"
+                          dominantBaseline="middle"
+                          fontSize={S * 0.26}
+                          fontWeight={700}
+                          fill={C.bright}
+                          stroke={C.bg}
+                          strokeWidth={0.8}
+                          paintOrder="stroke"
+                        >
+                          {order + 1}
+                        </text>
+                      )}
                     </g>
                   </g>
                 )}
@@ -459,7 +570,7 @@ function Board({
                     d.y + (rises ? -S * 0.7 : S * 0.7)
                   })`}
                 >
-                  <g className={rises ? 'tc-float' : 'tc-floatd'}>
+                  <g className={rises ? 'tc-float' : 'tc-floatd'} style={delay}>
                     <text
                       textAnchor="middle"
                       fontSize={S * 0.42}
