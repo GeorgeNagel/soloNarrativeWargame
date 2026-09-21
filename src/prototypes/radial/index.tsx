@@ -30,6 +30,16 @@ const RESOLVE_KEYS: Key[] = [
   { p: 3, t: 3860 },
 ]
 
+/** Beat held on the resolved board before the next round opens itself. */
+const ADVANCE_HOLD = 950
+
+/** A round that has already resolved, kept so the strip can replay it. */
+interface Resolved {
+  round: number
+  start: UnitSnapshot[]
+  orders: Record<string, OrderSlots>
+}
+
 /** The enemy AI in this prototype simply holds. */
 function freshOrders(units: readonly UnitSnapshot[]): Record<string, OrderSlots> {
   const orders: Record<string, OrderSlots> = {}
@@ -55,9 +65,14 @@ function RadialPrototype() {
   const [focusTick, setFocusTick] = useState(0)
   const [phase, setPhase] = useState<Phase>('planning')
   const [playhead, setPlayheadState] = useState(0)
+  // The round that just resolved, and whether the strip is showing it
+  // instead of the round now being planned.
+  const [resolved, setResolved] = useState<Resolved | null>(null)
+  const [viewingPast, setViewingPast] = useState(false)
 
   const playheadRef = useRef(0)
   const raf = useRef<number | null>(null)
+  const advanceTimer = useRef<number | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
 
   // Fill exactly what is left under whatever shell renders us, so the board
@@ -88,6 +103,12 @@ function RadialPrototype() {
     raf.current = null
   }, [])
 
+  /** Drop a pending auto-advance: the player has taken the round over. */
+  const cancelAdvance = useCallback(() => {
+    if (advanceTimer.current !== null) window.clearTimeout(advanceTimer.current)
+    advanceTimer.current = null
+  }, [])
+
   const runKeys = useCallback(
     (keys: Key[], done?: () => void) => {
       stop()
@@ -115,7 +136,13 @@ function RadialPrototype() {
     [setPlayhead, stop],
   )
 
-  useEffect(() => () => stop(), [stop])
+  useEffect(
+    () => () => {
+      stop()
+      cancelAdvance()
+    },
+    [cancelAdvance, stop],
+  )
 
   const tweenTo = useCallback(
     (target: number) => {
@@ -129,8 +156,18 @@ function RadialPrototype() {
     [runKeys],
   )
 
-  const frames = useMemo(() => simulate(start, orders), [start, orders])
+  // While replaying the last round the board and the strip run off that
+  // round's snapshot; planning state underneath is untouched.
+  const past = viewingPast ? resolved : null
+  const viewStart = past ? past.start : start
+  const viewOrders = past ? past.orders : orders
+
+  const frames = useMemo(() => simulate(viewStart, viewOrders), [viewStart, viewOrders])
   const playerUnits = useMemo(() => start.filter((unit) => unit.side === 'player'), [start])
+  const viewPlayerUnits = useMemo(
+    () => (past ? past.start.filter((unit) => unit.side === 'player') : playerUnits),
+    [past, playerUnits],
+  )
   const totalPoints = playerUnits.length * TICKS
   const spent = playerUnits.reduce(
     (total, unit) => total + spentPoints(orders[unit.id] ?? emptySlots()),
@@ -144,16 +181,16 @@ function RadialPrototype() {
 
   const strip: StripUnit[] = useMemo(
     () =>
-      playerUnits.map((unit) => ({
+      viewPlayerUnits.map((unit) => ({
         id: unit.id,
         sigil: unit.sigil,
         name: unit.name,
-        slots: orders[unit.id] ?? emptySlots(),
+        slots: viewOrders[unit.id] ?? emptySlots(),
         blocked: Array.from({ length: TICKS }, (_, tick) =>
           (frames[tick + 1]?.blocked ?? []).some((block) => block.id === unit.id),
         ),
       })),
-    [frames, orders, playerUnits],
+    [frames, viewOrders, viewPlayerUnits],
   )
 
   const report: TickReport[] = useMemo(
@@ -255,15 +292,18 @@ function RadialPrototype() {
   const scrub = useCallback(
     (value: number) => {
       stop()
+      // Taking hold of the strip cancels the hand-off to the next round.
+      cancelAdvance()
       setPlayhead(value)
       if (phase === 'resolving') setPhase('review')
     },
-    [phase, setPlayhead, stop],
+    [cancelAdvance, phase, setPlayhead, stop],
   )
 
   const focusOn = useCallback(
     (tick: number) => {
       stop()
+      cancelAdvance()
       if (phase !== 'planning') {
         tweenTo(tick + 1)
         return
@@ -272,37 +312,31 @@ function RadialPrototype() {
       const slots = selectedId ? orders[selectedId] ?? emptySlots() : emptySlots()
       tweenTo((slots[tick] ?? null) == null ? tick : tick + 1)
     },
-    [orders, phase, selectedId, stop, tweenTo],
+    [cancelAdvance, orders, phase, selectedId, stop, tweenTo],
   )
 
   const pickCell = useCallback(
     (unitId: string, tick: number) => {
       if (phase !== 'planning') {
+        cancelAdvance()
         tweenTo(tick + 1)
         return
       }
       selectUnit(unitId, tick)
     },
-    [phase, selectUnit, tweenTo],
+    [cancelAdvance, phase, selectUnit, tweenTo],
   )
 
-  const commit = useCallback(() => {
-    if (!ready) return
-    setSelectedId(null)
-    setPhase('resolving')
-    setPlayhead(0)
-    runKeys(RESOLVE_KEYS, () => setPhase('review'))
-  }, [ready, runKeys, setPlayhead])
-
-  const replay = useCallback(() => {
-    setPhase('resolving')
-    setPlayhead(0)
-    runKeys(RESOLVE_KEYS, () => setPhase('review'))
-  }, [runKeys, setPlayhead])
-
+  /**
+   * Hand the board to the next round: the round just fought is kept whole so
+   * the strip can still be scrubbed back through it.
+   */
   const nextRound = useCallback(() => {
     stop()
+    cancelAdvance()
     const survivors = frames[frames.length - 1].units.map((unit) => ({ ...unit }))
+    setResolved({ round, start, orders })
+    setViewingPast(false)
     setStart(survivors)
     setOrders(freshOrders(survivors))
     setSelectedId(null)
@@ -310,14 +344,56 @@ function RadialPrototype() {
     setPhase('planning')
     setPlayhead(0)
     setRound((value) => value + 1)
-  }, [frames, setPlayhead, stop])
+  }, [cancelAdvance, frames, orders, round, setPlayhead, start, stop])
+
+  const commit = useCallback(() => {
+    if (!ready) return
+    cancelAdvance()
+    setSelectedId(null)
+    setPhase('resolving')
+    setPlayhead(0)
+    runKeys(RESOLVE_KEYS, () => {
+      setPhase('review')
+      // The round resolves and then opens the next one by itself; a beat is
+      // held first so the last clash reads.
+      advanceTimer.current = window.setTimeout(nextRound, ADVANCE_HOLD)
+    })
+  }, [cancelAdvance, nextRound, ready, runKeys, setPlayhead])
+
+  const replay = useCallback(() => {
+    cancelAdvance()
+    setPhase('resolving')
+    setPlayhead(0)
+    runKeys(RESOLVE_KEYS, () => setPhase('review'))
+  }, [cancelAdvance, runKeys, setPlayhead])
+
+  /** Step back into the round that has already been fought. */
+  const openPast = useCallback(() => {
+    if (!resolved) return
+    cancelAdvance()
+    setSelectedId(null)
+    setViewingPast(true)
+    setPhase('resolving')
+    setPlayhead(0)
+    runKeys(RESOLVE_KEYS, () => setPhase('review'))
+  }, [cancelAdvance, resolved, runKeys, setPlayhead])
+
+  const closePast = useCallback(() => {
+    stop()
+    setViewingPast(false)
+    setSelectedId(null)
+    setPhase('planning')
+    setPlayhead(0)
+  }, [setPlayhead, stop])
 
   const selectedUnit = start.find((unit) => unit.id === selectedId) ?? null
   const hint = (() => {
+    if (past) return `round ${past.round} · scrub the strip · resume when you like`
     if (phase === 'resolving') return 'resolving · drag the strip to take over'
-    if (phase === 'review') return 'scrub the strip to replay the round'
+    if (phase === 'review') return 'resolved · scrub the strip, or wait for the next round'
     if (!selectedUnit) {
       if (ready) return 'every file ordered · commit when you like'
+      if (spent === 0 && resolved) return 'new round · tap a pulsing ring to order a file'
       const owing = playerUnits.length - unitsReady
       return `${owing} file${owing === 1 ? '' : 's'} still owe points · tap a pulsing ring`
     }
@@ -335,14 +411,16 @@ function RadialPrototype() {
 
       <header className="rp-head">
         <span>
-          <b>Round {round}</b> · pike skirmish
+          <b>Round {past ? past.round : round}</b> · pike skirmish
         </span>
         <span className="rp-phase">
-          {phase === 'planning'
-            ? `${spent}/${totalPoints} pts · ${unitsReady}/${playerUnits.length} files`
-            : phase === 'resolving'
-              ? 'resolving'
-              : 'resolved · replayable'}
+          {past
+            ? 'replay'
+            : phase === 'planning'
+              ? `${spent}/${totalPoints} pts · ${unitsReady}/${playerUnits.length} files`
+              : phase === 'resolving'
+                ? 'resolving'
+                : 'resolved · replayable'}
         </span>
       </header>
 
@@ -373,18 +451,43 @@ function RadialPrototype() {
       />
 
       <div className="rp-actions" style={{ maxWidth: 860, width: '100%', margin: '0 auto' }}>
-        {phase === 'planning' ? (
-          <button
-            type="button"
-            className="rp-commit"
-            disabled={!ready}
-            onClick={commit}
-            aria-label="Commit orders"
-          >
-            {ready
-              ? 'Commit orders'
-              : `Commit · ${totalPoints - spent} pt${totalPoints - spent === 1 ? '' : 's'} unspent`}
-          </button>
+        {past ? (
+          <>
+            <button
+              type="button"
+              className="rp-ghostbtn"
+              onClick={phase === 'resolving' ? () => scrub(TICKS) : openPast}
+            >
+              {phase === 'resolving' ? 'Skip' : 'Replay'}
+            </button>
+            <button
+              type="button"
+              className="rp-commit"
+              onClick={closePast}
+              style={{ color: COLORS.player, borderColor: COLORS.player }}
+            >
+              Back to round {round}
+            </button>
+          </>
+        ) : phase === 'planning' ? (
+          <>
+            {resolved && (
+              <button type="button" className="rp-ghostbtn" onClick={openPast}>
+                Replay round {resolved.round}
+              </button>
+            )}
+            <button
+              type="button"
+              className="rp-commit"
+              disabled={!ready}
+              onClick={commit}
+              aria-label="Commit orders"
+            >
+              {ready
+                ? 'Commit orders'
+                : `Commit · ${totalPoints - spent} pt${totalPoints - spent === 1 ? '' : 's'} unspent`}
+            </button>
+          </>
         ) : (
           <>
             <button

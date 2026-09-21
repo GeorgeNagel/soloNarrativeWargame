@@ -155,7 +155,7 @@ export type PreviewMap = Record<string, PreviewStep[]>
  *
  * Running all six units through the same loop as `resolveRound` (minus the
  * fighting) is what lets the preview show one friendly unit shouldering another
- * out of a hex — the blocked badge appears while you are still planning.
+ * out of a hex — the refused-advance mark appears while you are still planning.
  */
 export function previewAll(start: UnitState[], orders: Record<string, OrderSlots>): PreviewMap {
   const steps: PreviewMap = {}

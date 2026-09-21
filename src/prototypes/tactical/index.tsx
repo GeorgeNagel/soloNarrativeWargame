@@ -1,16 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import Board from './Board'
 import OrdersConsole from './OrdersConsole'
-import type { ForecastRow, LogRow, SlotFocus } from './OrdersConsole'
+import type { LogRow, SlotFocus } from './OrdersConsole'
 import { CSS } from './theme'
-import { hexDistance } from '../../engine'
 import {
   TICKS_PER_ROUND,
   assignedPoints,
   boardTiles,
   emptySlots,
   initialUnits,
-  isFlankAttack,
 } from './model'
 import type { OrderKind, OrderSlots, UnitState } from './model'
 import { previewAll, resolveRound } from './sim'
@@ -47,16 +45,6 @@ function firstEmpty(queue: OrderSlots): number | null {
 
 function isArmed(unit: UnitState, slots: Record<string, OrderSlots>): boolean {
   return assignedPoints(slots[unit.id] ?? []) >= unit.stats.movement
-}
-
-/** Models a defender loses to one attack, with the flank halving already applied. */
-function killsFrom(attacker: UnitState, defender: UnitState, flank: boolean): number {
-  const defense = flank ? Math.floor(defender.stats.defense / 2) : defender.stats.defense
-  const wounds = Math.max(
-    0,
-    attacker.stats.attack * attacker.models - defense * defender.models,
-  )
-  return Math.min(defender.models, Math.floor(wounds / defender.stats.hp))
 }
 
 function TacticalConsole() {
@@ -204,51 +192,6 @@ function TacticalConsole() {
   // Every friendly queue is dry-run together, so traces account for each other.
   const previews: PreviewMap | null = playing ? null : previewAll(units, slots)
 
-  // ── engagement forecast, per unit, against the AI's stand-fast ──
-  const forecast: ForecastRow[] = []
-  if (previews) {
-    const foes = units.filter((unit) => unit.side === 'enemy')
-    for (const unit of playerUnits) {
-      const steps = previews[unit.id] ?? []
-      const end = steps[steps.length - 1]
-      const endPos = end ? end.pos : unit.pos
-      const endFacing = end ? end.facing : unit.facing
-      const nearestNow = foes.reduce<number>(
-        (best, foe) => Math.min(best, hexDistance(unit.pos, foe.pos)),
-        99,
-      )
-      let target: UnitState | null = null
-      let rangeEnd = 99
-      for (const foe of foes) {
-        const foeSteps = previews[foe.id] ?? []
-        const foeEnd = foeSteps[foeSteps.length - 1]
-        const foeAt = { ...foe, pos: foeEnd ? foeEnd.pos : foe.pos }
-        const distance = hexDistance(endPos, foeAt.pos)
-        if (distance < rangeEnd) {
-          rangeEnd = distance
-          target = foeAt
-        }
-      }
-      const contact = Boolean(target) && rangeEnd === 1
-      const me = { ...unit, pos: endPos, facing: endFacing }
-      const flanking = contact && target ? isFlankAttack(target, endPos) : false
-      const flanked = contact && target ? isFlankAttack(me, target.pos) : false
-      forecast.push({
-        id: unit.id,
-        tag: unit.tag,
-        foeTag: target ? target.tag : '—',
-        rangeNow: nearestNow === 99 ? 0 : nearestNow,
-        rangeEnd: rangeEnd === 99 ? 0 : rangeEnd,
-        contact,
-        flanking,
-        flanked,
-        killsFoe: contact && target ? killsFrom(me, target, flanking) : 0,
-        killsUs: contact && target ? killsFrom(target, me, flanked) : 0,
-        blocked: steps.some((step) => step.blocked),
-      })
-    }
-  }
-
   // ── live tick log: several melees in one tick, listed ───
   const log: LogRow[] = []
   if (frame) {
@@ -362,7 +305,6 @@ function TacticalConsole() {
 
         <OrdersConsole
           units={shown}
-          forecast={forecast}
           log={log}
           slots={slots}
           selectedId={selectedId}

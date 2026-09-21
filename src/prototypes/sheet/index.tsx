@@ -17,7 +17,6 @@ import {
   pointsLeft,
   previewAll,
   resolveRound,
-  slotsComplete,
   unorderedIds,
 } from './rules'
 import type { OrderBook, OrderType, UnitId, Units } from './rules'
@@ -56,7 +55,7 @@ export default function SheetPrototype() {
   const barRef = useRef<HTMLDivElement | null>(null)
   const closeTimer = useRef<number | null>(null)
   /** Target bottom padding of the stage; read instead of the mid-transition value. */
-  const stagePad = useRef(78)
+  const stagePad = useRef(6)
   const alive = useRef(true)
   const run = useRef(0)
 
@@ -69,7 +68,7 @@ export default function SheetPrototype() {
     }
   }, [])
 
-  const stagePadding = sheetUnit && !closing ? Math.max(10, sheetH - barH + 10) : 78
+  const stagePadding = sheetUnit && !closing ? Math.max(10, sheetH - barH + 8) : 6
   stagePad.current = stagePadding
 
   // The board is the hero: it always takes the largest rectangle the stage allows.
@@ -133,6 +132,8 @@ export default function SheetPrototype() {
 
   const closeSheet = useCallback(() => {
     if (!sheetUnit || closing) return
+    // The board and the stage behind it both dismiss, so never stack two timers.
+    if (closeTimer.current) window.clearTimeout(closeTimer.current)
     setClosing(true)
     setSelected(null)
     closeTimer.current = window.setTimeout(() => {
@@ -168,17 +169,17 @@ export default function SheetPrototype() {
     [planning, sheetUnit, closing, closeSheet, showUnit],
   )
 
-  /** Jump to the next company still owing points, wrapping round the roster. */
-  const goNextUnordered = useCallback(() => {
-    const from = sheetUnit ? PLAYER_IDS.indexOf(sheetUnit) : -1
-    for (let step = 1; step <= PLAYER_IDS.length; step += 1) {
-      const id = PLAYER_IDS[(from + step + PLAYER_IDS.length) % PLAYER_IDS.length]
-      if (units[id].models > 0 && !slotsComplete(orders[id])) {
-        showUnit(id)
+  /** The board is a dismiss surface while the sheet is up: any tap drops it. */
+  const tapBoard = useCallback(
+    (id: UnitId) => {
+      if (sheetUnit && !closing) {
+        closeSheet()
         return
       }
-    }
-  }, [sheetUnit, units, orders, showUnit])
+      openSheet(id)
+    },
+    [sheetUnit, closing, closeSheet, openSheet],
+  )
 
   /** Swiping the sheet sideways walks your own line, left to right. */
   const cycleUnit = useCallback(
@@ -296,19 +297,8 @@ export default function SheetPrototype() {
     setPhase('planning')
   }, [ready, planning, units, orders])
 
-  const currentComplete = sheetUnit ? slotsComplete(orders[sheetUnit]) : false
-  const nextWaiting = waiting.find((id) => id !== sheetUnit)
-
-  const commitButton = (inSheet: boolean) => {
-    // Strict gate: no commit until every living company has spent all three
-    // points. In the sheet, the same slot doubles as a jump to whoever is left.
-    if (planning && !ready && inSheet && currentComplete && nextWaiting) {
-      return (
-        <button type="button" className="sh-commit sh-commit-next" onClick={goNextUnordered}>
-          Order {shortName(units[nextWaiting].name)} ›
-        </button>
-      )
-    }
+  const commitButton = () => {
+    // Strict gate: no commit until every living company has spent all three points.
     const label = !planning
       ? 'Resolving the round…'
       : ready
@@ -372,7 +362,12 @@ export default function SheetPrototype() {
           </button>
         </header>
 
-        <div ref={stageRef} className="sh-stage" style={{ paddingBottom: stagePadding }}>
+        <div
+          ref={stageRef}
+          className="sh-stage"
+          style={{ paddingBottom: stagePadding }}
+          onPointerDown={closeSheet}
+        >
           <Board
             units={units}
             orders={orders}
@@ -382,27 +377,9 @@ export default function SheetPrototype() {
             fx={fx}
             bumped={bumped}
             width={boardWidth}
-            onSelect={openSheet}
+            onSelect={tapBoard}
             onBackdrop={closeSheet}
           />
-          <p className={`sh-caption${sheetUnit ? ' sh-caption-hidden' : ''}`}>
-            {planning ? (
-              <>
-                Three companies a side, three ticks to the round.
-                <br />
-                <b>Tap a company</b> — gold rings mark the ones still waiting.
-              </>
-            ) : clashLine ? (
-              <>
-                Tick <b>{tickLabel}</b> — {fx && fx.clashes.length > 1 ? 'spears lock at ' : ''}
-                <b>{clashLine}</b>
-              </>
-            ) : (
-              <>
-                Orders are locked. Watching tick <b>{tickLabel ?? TICK_NUMERAL[0]}</b> play out…
-              </>
-            )}
-          </p>
         </div>
 
         <div ref={barRef} className={`sh-bar${sheetUnit ? ' sh-bar-hidden' : ''}`}>
@@ -435,12 +412,27 @@ export default function SheetPrototype() {
               )
             })}
           </div>
+          {/* one status line: the enemy while you plan, the blow-by-blow while it runs */}
           <div className="sh-foe">
-            <span className="sh-foe-swatch" style={{ background: T.enemy }} />
-            {ENEMY_IDS.filter((id) => units[id].models > 0).length} enemy banners ·{' '}
-            {ENEMY_IDS.reduce((total, id) => total + units[id].models, 0)} models · holding
+            {planning ? (
+              <>
+                <span className="sh-foe-swatch" style={{ background: T.enemy }} />
+                {ENEMY_IDS.filter((id) => units[id].models > 0).length} enemy banners ·{' '}
+                {ENEMY_IDS.reduce((total, id) => total + units[id].models, 0)} models · holding
+              </>
+            ) : clashLine ? (
+              <>
+                <span className="sh-foe-swatch" style={{ background: T.gold }} />
+                Tick {tickLabel} · {clashLine}
+              </>
+            ) : (
+              <>
+                <span className="sh-foe-swatch" style={{ background: T.gold }} />
+                Tick {tickLabel ?? TICK_NUMERAL[0]} · orders locked
+              </>
+            )}
           </div>
-          {commitButton(false)}
+          {commitButton()}
         </div>
 
         {sheetUnit && (
@@ -453,7 +445,7 @@ export default function SheetPrototype() {
             closing={closing}
             lastPlaced={lastPlaced}
             roster={roster}
-            commit={commitButton(true)}
+            commit={commitButton()}
             onPlace={placeOrder}
             onClearSlot={clearSlot}
             onClearAll={clearAll}

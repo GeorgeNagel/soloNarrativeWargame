@@ -89,10 +89,13 @@ export const CSS = `
 .tc-board{display:block;width:100%;height:auto;}
 
 .tc-panel{
-  width:368px;flex:0 0 368px;background:var(--panel);
+  width:338px;flex:0 0 338px;background:var(--panel);
   display:flex;flex-direction:column;min-height:0;
 }
-.tc-panel-scroll{overflow-y:auto;flex:1;min-height:0;}
+/* column, so the doctrine card can be pinned to the foot of the panel and the
+   space freed by the old forecast table reads as deliberate rather than empty */
+.tc-panel-scroll{overflow-y:auto;flex:1;min-height:0;display:flex;flex-direction:column;}
+.tc-panel-scroll > .tc-sect.tc-wide{margin-top:auto;}
 .tc-sect{
   padding:5px 9px;border-bottom:1px solid var(--lineHot);border-top:1px solid var(--lineHot);
   background:var(--deep);
@@ -178,7 +181,7 @@ export const CSS = `
 .tc-readrow.hot > b{color:var(--enm);}
 
 /* ── order matrix: roster, status and selector in one block ── */
-.tc-plan{padding:7px 9px 8px;display:flex;flex-direction:column;gap:3px;}
+.tc-plan{padding:8px 9px 10px;display:flex;flex-direction:column;gap:5px;}
 .tc-mrow{
   display:grid;grid-template-columns:62px repeat(3,1fr) 30px;gap:3px;align-items:stretch;
   position:relative;padding-left:4px;
@@ -192,11 +195,9 @@ export const CSS = `
   text-align:left;min-width:0;
 }
 .tc-mrow.head .tc-mtag{color:var(--dim);font-size:8px;letter-spacing:.16em;cursor:default;}
-.tc-mrow.ai .tc-mtag{opacity:.85;}
 .tc-dot{width:6px;height:6px;flex:0 0 6px;border:1px solid var(--warn);background:transparent;}
 .tc-dot.part{background:var(--warn);opacity:.55;}
 .tc-dot.armed{border-color:var(--plr);background:var(--plr);}
-.tc-mrow.ai .tc-dot{border-color:var(--dim);background:var(--dim);opacity:.5;}
 .tc-cell{
   font:inherit;font-size:10px;letter-spacing:.04em;text-align:center;padding:4px 0;
   border:1px solid var(--line);background:#070d12;color:var(--bright);cursor:pointer;
@@ -208,51 +209,14 @@ export const CSS = `
 .tc-cell.live{border-color:var(--warn);color:var(--warn);background:#191305;}
 .tc-cell.past{opacity:.4;}
 .tc-cell:disabled{cursor:default;}
-/* OPFOR orders are fixed, so they read as reference rather than as controls. */
-.tc-mrow.ai .tc-cell{color:var(--dim);background:#060b10;}
-.tc-mrow.ai .tc-mcount{color:var(--dim);opacity:.7;}
 .tc-mrow.head .tc-cell{border-color:transparent;background:transparent;color:var(--dim);font-size:8px;letter-spacing:.16em;padding:2px 0;}
 .tc-mcount{font-size:9px;letter-spacing:.02em;color:var(--dim);display:flex;align-items:center;justify-content:flex-end;}
 .tc-mcount.part{color:var(--warn);}
 .tc-mcount.armed{color:var(--plr);}
 .tc-mrow.head .tc-mcount{font-size:8px;letter-spacing:.1em;}
-.tc-mdiv{
-  display:flex;align-items:center;gap:6px;margin:4px 0 2px;
-  font-size:8px;letter-spacing:.16em;color:var(--dim);
-}
-.tc-mdiv::after{content:'';flex:1;border-top:1px dashed var(--line);}
-
-/* ── forecast table ────────────────────────────────────── */
-.tc-fc{padding:6px 9px 8px;display:flex;flex-direction:column;gap:2px;}
-.tc-fcrow{
-  display:grid;grid-template-columns:74px 46px 46px 1fr auto;gap:5px;align-items:center;
-  font-size:10px;letter-spacing:.03em;color:var(--text);padding:2px 0;
-  border-bottom:1px dotted var(--line);
-}
-.tc-fcrow:last-child{border-bottom:none;}
-.tc-fcrow > i{
-  font-style:normal;color:var(--bright);font-size:10px;letter-spacing:.06em;
-  display:flex;align-items:center;gap:4px;
-}
-.tc-fcrow > span{white-space:nowrap;}
-.tc-fcrow > span > small{color:var(--dim);margin:0 1px;}
-.tc-fcrow > span.ok{color:var(--plr);}
-.tc-fcrow > span.hot{color:var(--enm);}
-.tc-fcrow > span.dim{color:var(--dim);}
-.tc-fcrow > b{font-weight:600;text-align:right;white-space:nowrap;color:var(--dim);}
-.tc-fcrow > b em{font-style:normal;}
-.tc-fcrow > b em.ok{color:var(--plr);}
-.tc-fcrow > b em.hot{color:var(--enm);}
-.tc-fcrow.hit > i{color:var(--warn);}
-.tc-fcrow.head{color:var(--dim);font-size:8px;letter-spacing:.14em;border-bottom:1px solid var(--line);}
-.tc-fcrow.head > i,.tc-fcrow.head > b{color:var(--dim);font-size:8px;letter-spacing:.14em;}
-.tc-flag{
-  font-style:normal;font-size:8px;letter-spacing:.1em;color:var(--warn);
-  border:1px solid var(--warn);padding:0 3px;line-height:1.4;
-}
 .tc-empty{padding:9px;font-size:9px;letter-spacing:.12em;color:var(--dim);}
 
-.tc-legend{padding:6px 9px 10px;display:flex;flex-direction:column;gap:3px;}
+.tc-legend{padding:7px 9px 11px;display:flex;flex-direction:column;gap:3px;}
 .tc-legendrow{display:grid;grid-template-columns:70px 1fr;gap:6px;font-size:9px;letter-spacing:.06em;}
 .tc-legendrow > i{font-style:normal;color:var(--text);letter-spacing:.1em;}
 .tc-legendrow > span{color:var(--dim);}
@@ -345,7 +309,7 @@ export const CSS = `
     border-right:none;border-bottom:1px solid var(--lineHot);padding:6px 8px 7px;
   }
   .tc-stage-rail.foot{display:none;}
-  .tc-boardwrap{max-width:min(100%, 33vh);}
+  .tc-boardwrap{max-width:min(100%, 44vh);}
   .tc-panel{width:auto;flex:1 1 auto;}
   .tc-panel-scroll{overflow-y:visible;}
   .tc-foot{position:sticky;bottom:0;z-index:6;padding:7px 8px;}
@@ -355,12 +319,9 @@ export const CSS = `
   .tc-wide{display:none;}
   /* every row loses a pixel or two so the order pad clears the commit bar */
   .tc-sect{padding:4px 8px;}
-  .tc-plan{padding:5px 8px 6px;gap:2px;}
+  .tc-plan{padding:6px 8px 7px;gap:4px;}
   .tc-mrow{grid-template-columns:58px repeat(3,1fr) 28px;}
   .tc-cell{padding:3px 0;}
-  .tc-mdiv{margin:2px 0 1px;}
-  .tc-fc{padding:3px 8px 5px;gap:0;}
-  .tc-fcrow{padding:1px 0;grid-template-columns:70px 42px 42px 1fr auto;}
   .tc-card{padding:6px 8px 8px;}
   .tc-stats,.tc-slots{margin-top:5px;}
   .tc-slot{min-height:40px;}
