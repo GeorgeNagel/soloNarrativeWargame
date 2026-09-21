@@ -113,33 +113,54 @@ export function isFlankAttack(defender: UnitState, attackerPos: Hex): boolean {
   return spread > 1
 }
 
-/** The fixed scenario: one pikemen block per side, bottom-centre vs top-centre. */
+/**
+ * The fixed scenario: three pikemen blocks a side.
+ *
+ * Both lines are staggered — wings forward, centre refused — and sit mirrored
+ * through the board's centre hex, so a straight three-tick advance puts the two
+ * wings into contact on the same tick while the centre is left a wheel short.
+ */
+interface RosterEntry {
+  tag: string
+  name: string
+  pos: Hex
+}
+
+const PLAYER_START: RosterEntry[] = [
+  { tag: 'PK-01', name: '1st Pike, Aubin Levy', pos: hex(-1, 5) },
+  { tag: 'PK-02', name: '2nd Pike, Marsan', pos: hex(0, 6) },
+  { tag: 'PK-03', name: '3rd Pike, Guiscard', pos: hex(2, 5) },
+]
+
+const ENEMY_START: RosterEntry[] = [
+  { tag: 'BR-07', name: 'Brabant Pikes VII', pos: hex(5, 1) },
+  { tag: 'BR-08', name: 'Brabant Pikes VIII', pos: hex(4, 0) },
+  { tag: 'BR-09', name: 'Brabant Pikes IX', pos: hex(2, 1) },
+]
+
+function buildSide(
+  side: Side,
+  facing: HexDirection,
+  roster: RosterEntry[],
+): UnitState[] {
+  return roster.map((entry, index) => ({
+    id: `${side === 'player' ? 'plr' : 'enm'}-${index + 1}`,
+    name: entry.name,
+    tag: entry.tag,
+    side,
+    models: 20,
+    startModels: 20,
+    pos: entry.pos,
+    facing,
+    angle: facingAngle(facing),
+    stats: PIKEMEN,
+  }))
+}
+
 export function initialUnits(): UnitState[] {
   return [
-    {
-      id: 'plr-1',
-      name: '1st Pike, Aubin Levy',
-      tag: 'PK-01',
-      side: 'player',
-      models: 20,
-      startModels: 20,
-      pos: hex(0, 6),
-      facing: 'NE',
-      angle: facingAngle('NE'),
-      stats: PIKEMEN,
-    },
-    {
-      id: 'enm-1',
-      name: 'Brabant Pikes',
-      tag: 'BR-07',
-      side: 'enemy',
-      models: 20,
-      startModels: 20,
-      pos: hex(3, 0),
-      facing: 'SW',
-      angle: facingAngle('SW'),
-      stats: PIKEMEN,
-    },
+    ...buildSide('player', 'NE', PLAYER_START),
+    ...buildSide('enemy', 'SW', ENEMY_START),
   ]
 }
 
@@ -149,4 +170,13 @@ export function emptySlots(): OrderSlots {
 
 export function assignedPoints(slots: OrderSlots): number {
   return slots.filter((slot) => slot !== null).length
+}
+
+/** Planning state of one unit's queue — drives the matrix and the board rings. */
+export type QueueState = 'empty' | 'part' | 'armed'
+
+export function queueState(slots: OrderSlots, points: number): QueueState {
+  const spent = assignedPoints(slots)
+  if (spent === 0) return 'empty'
+  return spent >= points ? 'armed' : 'part'
 }
