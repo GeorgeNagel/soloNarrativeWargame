@@ -49,11 +49,3 @@ export function OrderGlyph({ order, size = 22, color = '#2b1f16' }: GlyphProps) 
     </svg>
   )
 }
-
-export function CloseGlyph() {
-  return (
-    <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" aria-hidden="true">
-      <path d="M6 9.5 12 16l6-6.5" />
-    </svg>
-  )
-}

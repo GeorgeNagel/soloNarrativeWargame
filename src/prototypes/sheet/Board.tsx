@@ -53,7 +53,9 @@ interface BoardProps {
   /** Companies whose advance stalled against someone this tick. */
   bumped: UnitId[]
   width: number
+  /** Tapping a token: opens that company's orders, or drops the sheet if it is up. */
   onSelect: (id: UnitId) => void
+  /** Tapping the board anywhere else always drops the sheet. */
   onBackdrop: () => void
 }
 
@@ -128,6 +130,7 @@ function Board({
     <div
       className={`sh-slab${fx && fx.clashes.length > 0 ? ' sh-slab-clash' : ''}`}
       style={{ width: width > 0 ? `${width}px` : undefined }}
+      onPointerDown={onBackdrop}
     >
       <svg
         viewBox={`${VIEW.left} ${VIEW.top} ${VIEW.width} ${VIEW.height}`}
@@ -140,16 +143,6 @@ function Board({
             <stop offset="100%" stopColor="rgba(255,255,255,0)" />
           </radialGradient>
         </defs>
-
-        {/* backdrop: tapping empty board dismisses the sheet */}
-        <rect
-          x={VIEW.left}
-          y={VIEW.top}
-          width={VIEW.width}
-          height={VIEW.height}
-          fill="transparent"
-          onPointerDown={onBackdrop}
-        />
 
         {/* tiles */}
         {TILES.map(({ at, key }, index) => (

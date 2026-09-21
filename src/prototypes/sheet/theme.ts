@@ -25,4 +25,4 @@ export const T = {
   sans: 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
 } as const
 
-export const SHEET_HEIGHT = 352
+export const SHEET_HEIGHT = 292
