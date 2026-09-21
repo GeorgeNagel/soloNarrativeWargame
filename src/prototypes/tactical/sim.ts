@@ -28,6 +28,8 @@ export interface TickFrame {
   /** Post-combat: what the board looks like at the tick boundary. */
   units: UnitState[]
   clashes: ClashEvent[]
+  /** Units whose ADV was refused this tick (board edge or an occupied hex). */
+  blockedIds: string[]
   /** Whether anyone was in contact at this tick boundary. */
   contact: boolean
 }
@@ -54,13 +56,28 @@ export function applyOrder(
   return unit
 }
 
+/**
+ * Hexes `unit` may not enter this tick. Units move in roster order, so a unit
+ * is blocked by those that already moved and by those still waiting their turn.
+ */
+function blockedHexes(unit: UnitState, moved: UnitState[], pending: UnitState[]): Set<string> {
+  const done = new Set(moved.map((other) => other.id))
+  const standing = [...moved, ...pending.filter((other) => !done.has(other.id))]
+  return new Set(
+    standing
+      .filter((other) => other.id !== unit.id && other.models > 0)
+      .map((other) => hexKey(other.pos)),
+  )
+}
+
 function fight(units: UnitState[]): { units: UnitState[]; clashes: ClashEvent[] } {
   const clashes: ClashEvent[] = []
   const losses = new Map<string, number>()
 
   for (const attacker of units) {
+    if (attacker.models <= 0) continue
     for (const defender of units) {
-      if (attacker.side === defender.side) continue
+      if (attacker.side === defender.side || defender.models <= 0) continue
       if (!hexIsAdjacent(attacker.pos, defender.pos)) continue
       const flank = isFlankAttack(defender, attacker.pos)
       const defense = flank ? Math.floor(defender.stats.defense / 2) : defender.stats.defense
@@ -99,13 +116,12 @@ export function resolveRound(
 
   for (let tick = 0; tick < TICKS_PER_ROUND; tick += 1) {
     const moved: UnitState[] = []
+    const blockedIds: string[] = []
     for (const unit of current) {
-      const occupied = new Set(
-        [...moved, ...current.filter((other) => !moved.some((m) => m.id === other.id))]
-          .filter((other) => other.id !== unit.id && other.models > 0)
-          .map((other) => hexKey(other.pos)),
-      )
-      moved.push(applyOrder(unit, orders[unit.id]?.[tick] ?? null, occupied))
+      const order = orders[unit.id]?.[tick] ?? null
+      const next = applyOrder(unit, order, blockedHexes(unit, moved, current))
+      if (order === 'move' && hexKey(next.pos) === hexKey(unit.pos)) blockedIds.push(unit.id)
+      moved.push(next)
     }
     const resolved = fight(moved)
     frames.push({
@@ -113,6 +129,7 @@ export function resolveRound(
       moved,
       units: resolved.units,
       clashes: resolved.clashes,
+      blockedIds,
       contact: resolved.clashes.length > 0,
     })
     current = resolved.units
@@ -131,30 +148,36 @@ export interface PreviewStep {
   blocked: boolean
 }
 
-/** Dry-run of a queue-in-progress, for the board ghost + trace. */
-export function previewPath(
-  unit: UnitState,
-  slots: OrderSlots,
-  others: UnitState[],
-): PreviewStep[] {
-  const blockers = new Set(
-    others.filter((other) => other.id !== unit.id).map((other) => hexKey(other.pos)),
-  )
-  const steps: PreviewStep[] = []
-  let cursor: UnitState = { ...unit }
+export type PreviewMap = Record<string, PreviewStep[]>
+
+/**
+ * Dry-run of every queue-in-progress at once, for the board traces and ghosts.
+ *
+ * Running all six units through the same loop as `resolveRound` (minus the
+ * fighting) is what lets the preview show one friendly unit shouldering another
+ * out of a hex — the blocked badge appears while you are still planning.
+ */
+export function previewAll(start: UnitState[], orders: Record<string, OrderSlots>): PreviewMap {
+  const steps: PreviewMap = {}
+  for (const unit of start) steps[unit.id] = []
+  let current = cloned(start)
 
   for (let tick = 0; tick < TICKS_PER_ROUND; tick += 1) {
-    const order = slots[tick] ?? null
-    const before = cursor
-    cursor = applyOrder(cursor, order, blockers)
-    steps.push({
-      tick,
-      pos: cursor.pos,
-      facing: cursor.facing,
-      angle: cursor.angle,
-      order,
-      blocked: order === 'move' && before.pos === cursor.pos,
-    })
+    const moved: UnitState[] = []
+    for (const unit of current) {
+      const order = orders[unit.id]?.[tick] ?? null
+      const next = applyOrder(unit, order, blockedHexes(unit, moved, current))
+      moved.push(next)
+      steps[unit.id].push({
+        tick,
+        pos: next.pos,
+        facing: next.facing,
+        angle: next.angle,
+        order,
+        blocked: order === 'move' && hexKey(next.pos) === hexKey(unit.pos),
+      })
+    }
+    current = moved
   }
   return steps
 }

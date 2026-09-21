@@ -15,10 +15,13 @@ import {
   spentPoints,
   unitsAt,
 } from './model'
-import type { Frame, OrderSlots, OrderType, RenderUnit, UnitSnapshot } from './model'
+import type { Frame, OrderSlots, OrderType, RenderUnit } from './model'
 
-const MARGIN = 52
+const MARGIN_X = 38
+const MARGIN_Y = 44
 const TRAIL_STEPS = [0.09, 0.19, 0.3]
+/** Radius of the three order-point arcs drawn around every unit. */
+const POINT_RING = 33
 
 function key(tile: Hex): string {
   return `${tile.q},${tile.r}`
@@ -40,6 +43,21 @@ function noseWedge(origin: Point, angle: number, inner = 23, tip = 35, spread = 
   const b = polar(origin, angle, tip)
   const c = polar(origin, angle + spread, inner)
   return `M ${a.x.toFixed(2)} ${a.y.toFixed(2)} L ${b.x.toFixed(2)} ${b.y.toFixed(2)} L ${c.x.toFixed(2)} ${c.y.toFixed(2)} Z`
+}
+
+/** Arc around the origin, for the order-point ring on each token. */
+function arc(radius: number, from: number, to: number): string {
+  const a = polar({ x: 0, y: 0 }, from, radius)
+  const b = polar({ x: 0, y: 0 }, to, radius)
+  const large = Math.abs(to - from) > 180 ? 1 : 0
+  return `M ${a.x.toFixed(2)} ${a.y.toFixed(2)} A ${radius} ${radius} 0 ${large} 1 ${b.x.toFixed(2)} ${b.y.toFixed(2)}`
+}
+
+function unitVector(from: Point, to: Point): Point {
+  const dx = to.x - from.x
+  const dy = to.y - from.y
+  const length = Math.hypot(dx, dy) || 1
+  return { x: dx / length, y: dy / length }
 }
 
 interface BoardProps {
@@ -65,10 +83,10 @@ function Board({
   const tiles = useMemo(() => boardTiles(), [])
   const view = useMemo(() => {
     const centers = tiles.map(center)
-    const left = Math.min(...centers.map((p) => p.x)) - hexWidth(HEX_SIZE) / 2 - MARGIN
-    const top = Math.min(...centers.map((p) => p.y)) - hexHeight(HEX_SIZE) / 2 - MARGIN
-    const right = Math.max(...centers.map((p) => p.x)) + hexWidth(HEX_SIZE) / 2 + MARGIN
-    const bottom = Math.max(...centers.map((p) => p.y)) + hexHeight(HEX_SIZE) / 2 + MARGIN
+    const left = Math.min(...centers.map((p) => p.x)) - hexWidth(HEX_SIZE) / 2 - MARGIN_X
+    const top = Math.min(...centers.map((p) => p.y)) - hexHeight(HEX_SIZE) / 2 - MARGIN_Y
+    const right = Math.max(...centers.map((p) => p.x)) + hexWidth(HEX_SIZE) / 2 + MARGIN_X
+    const bottom = Math.max(...centers.map((p) => p.y)) + hexHeight(HEX_SIZE) / 2 + MARGIN_Y
     return { left, top, width: right - left, height: bottom - top }
   }, [tiles])
 
@@ -91,15 +109,19 @@ function Board({
     for (const step of track.steps) plannedTiles.add(key(step.hex))
   }
 
-  const moveBlocked = (() => {
-    if (!selected) return true
-    const snapshot = start.units.find((unit) => unit.id === selected.id)
-    if (!snapshot) return true
+  /**
+   * Off the board an advance can never happen, so it is struck out. A hex
+   * somebody is standing on might still clear this tick if they move too, so
+   * that order stays takeable and is flagged as contested instead.
+   */
+  const advance: 'open' | 'edge' | 'contested' = (() => {
+    if (!selected) return 'edge'
     const target = hexNeighbor(selected.hex, selected.facing)
+    if (!isOnBoard(target)) return 'edge'
     const occupied = live.some(
       (other) => other.id !== selected.id && hexEquals(other.hex, target),
     )
-    return !isOnBoard(target) || occupied
+    return occupied ? 'contested' : 'open'
   })()
 
   const selectedSpent = selectedId ? spentPoints(orders[selectedId] ?? []) : 0
@@ -121,6 +143,11 @@ function Board({
         <radialGradient id="rp-token-enemy" cx="50%" cy="34%">
           <stop offset="0%" stopColor="#431914" />
           <stop offset="100%" stopColor="#140a0b" />
+        </radialGradient>
+        <radialGradient id="rp-cluster-well">
+          <stop offset="0%" stopColor={COLORS.void} stopOpacity={0.72} />
+          <stop offset="62%" stopColor={COLORS.void} stopOpacity={0.55} />
+          <stop offset="100%" stopColor={COLORS.void} stopOpacity={0} />
         </radialGradient>
         <filter id="rp-glow" x="-70%" y="-70%" width="240%" height="240%">
           <feGaussianBlur stdDeviation="5" result="blur" />
@@ -151,10 +178,13 @@ function Board({
         })}
       </g>
 
-      {/* ---- planned / resolved traces ---- */}
+      {/* ---- planned / resolved traces ----
+          Six units would be spaghetti at full strength, so only the selected
+          file marches; the rest keep a hairline. */}
       <g>
         {tracks.map(({ unit, steps }) => {
           const accent = sideColor(unit.side)
+          const lead = unit.id === selectedId
           const points = steps.map((step) => center(step.hex))
           const moves = points.filter(
             (point, index) =>
@@ -165,35 +195,48 @@ function Board({
             .map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`)
             .join(' ')
           return (
-            <g key={`trace-${unit.id}`} opacity={unit.id === selectedId ? 1 : 0.55}>
-              <path d={d} fill="none" stroke={accent} strokeOpacity={0.12} strokeWidth={9} />
+            <g key={`trace-${unit.id}`}>
+              {lead && (
+                <path d={d} fill="none" stroke={accent} strokeOpacity={0.12} strokeWidth={9} />
+              )}
               <path
-                className="rp-march"
+                className={lead ? 'rp-march' : undefined}
                 d={d}
                 fill="none"
                 stroke={accent}
-                strokeOpacity={0.75}
-                strokeWidth={1.4}
-                strokeDasharray="7 7"
+                strokeOpacity={lead ? 0.8 : 0.42}
+                strokeWidth={lead ? 1.4 : 1}
+                strokeDasharray={lead ? '7 7' : '3 5'}
               />
             </g>
           )
         })}
       </g>
 
-      {/* ---- ghosted future states ---- */}
+      {/* ---- ghosted future states ----
+          The selected unit ghosts every tick it changes on; everybody else
+          shows only where they end up, so the board stays legible. */}
       <g>
-        {tracks.flatMap(({ unit, steps }) =>
-          steps.slice(1).map((step, index) => {
+        {tracks.flatMap(({ unit, steps }) => {
+          const lead = unit.id === selectedId
+          const accent = sideColor(unit.side)
+          return steps.slice(1).map((step, index) => {
             const tick = index + 1
             const ahead = tick - playhead
             if (ahead <= 0.08) return null
             // A unit that neither moves nor turns needs no ghost of itself.
             const previous = steps[tick - 1]
             if (hexEquals(previous.hex, step.hex) && previous.facing === step.facing) return null
-            const strength = Math.max(0.16, 0.62 - ahead * 0.13)
+            const settled =
+              !lead &&
+              steps.slice(tick + 1).some(
+                (later) => !hexEquals(later.hex, step.hex) || later.facing !== step.facing,
+              )
+            if (settled) return null
+            const strength = lead
+              ? Math.max(0.24, 0.72 - ahead * 0.12)
+              : Math.max(0.24, 0.48 - ahead * 0.05)
             const at = center(step.hex)
-            const accent = sideColor(unit.side)
             const fan = steps
               .slice(1, tick)
               .filter((earlier) => hexEquals(earlier.hex, step.hex)).length
@@ -223,107 +266,193 @@ function Board({
                 </text>
               </g>
             )
-          }),
-        )}
+          })
+        })}
       </g>
 
-      {/* ---- combat beats ---- */}
+      {/* ---- blocked moves ---- */}
       <g>
         {frames.flatMap((frame, index) =>
-          frame.clashes.map((clash) => {
-            const nearness = 1 - Math.min(1, Math.abs(playhead - index) / 0.75)
+          frame.blocked.map((block) => {
+            const nearness = Math.max(
+              editable ? 0.34 : 0,
+              1 - Math.min(1, Math.abs(playhead - index) / 0.8),
+            )
             if (nearness <= 0.02) return null
-            const from = center(clash.attackerHex)
-            const to = center(clash.defenderHex)
-            const mid = { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 }
-            const grow = 1 - nearness
-            const accent = clash.flank ? COLORS.focus : '#FFD9A0'
+            const from = center(block.hex)
+            const to = center(block.into)
+            const step = unitVector(from, to)
+            const wall = { x: from.x + step.x * 33, y: from.y + step.y * 33 }
+            const across = { x: -step.y, y: step.x }
             return (
-              <g key={`clash-${index}-${clash.attackerId}-${clash.defenderId}`} opacity={nearness}>
-                <circle
-                  cx={mid.x}
-                  cy={mid.y}
-                  r={7 + grow * 54}
-                  fill="none"
-                  stroke={accent}
-                  strokeWidth={3.2 * nearness + 0.4}
-                  filter="url(#rp-glow)"
-                />
-                <circle
-                  cx={mid.x}
-                  cy={mid.y}
-                  r={4 + grow * 26}
-                  fill="none"
-                  stroke={accent}
-                  strokeOpacity={0.5}
-                  strokeWidth={1.4}
-                />
-                {[0, 60, 120, 180, 240, 300].map((spark) => {
-                  const a = polar(mid, spark + grow * 22, 12 + grow * 30)
-                  const b = polar(mid, spark + grow * 22, 22 + grow * 46)
-                  return (
-                    <line
-                      key={spark}
-                      x1={a.x}
-                      y1={a.y}
-                      x2={b.x}
-                      y2={b.y}
-                      stroke={accent}
-                      strokeOpacity={0.75 * nearness}
-                      strokeWidth={1.6}
-                      strokeLinecap="round"
-                    />
-                  )
-                })}
-                <circle
-                  cx={to.x}
-                  cy={to.y}
-                  r={24 + nearness * 5}
-                  fill="none"
-                  stroke={accent}
-                  strokeOpacity={0.6 * nearness}
-                  strokeWidth={2}
+              <g key={`block-${index}-${block.id}`} opacity={nearness}>
+                <line
+                  x1={wall.x - across.x * 19}
+                  y1={wall.y - across.y * 19}
+                  x2={wall.x + across.x * 19}
+                  y2={wall.y + across.y * 19}
+                  stroke={COLORS.enemy}
+                  strokeWidth={3.2}
+                  strokeLinecap="round"
+                  strokeDasharray="5 4"
                 />
                 <line
-                  x1={from.x}
-                  y1={from.y}
-                  x2={to.x}
-                  y2={to.y}
-                  stroke={accent}
-                  strokeWidth={1.2}
-                  strokeOpacity={0.55}
-                  strokeDasharray="3 4"
+                  x1={wall.x - across.x * 10 - step.x * 10}
+                  y1={wall.y - across.y * 10 - step.y * 10}
+                  x2={wall.x + across.x * 10 + step.x * 10}
+                  y2={wall.y + across.y * 10 + step.y * 10}
+                  stroke={COLORS.enemy}
+                  strokeOpacity={0.75}
+                  strokeWidth={2}
+                  strokeLinecap="round"
                 />
                 <text
-                  x={to.x}
-                  y={to.y - 36 - nearness * 4}
+                  x={wall.x + across.x * 30}
+                  y={wall.y + across.y * 30 + 3.2}
                   textAnchor="middle"
-                  fontSize={20}
+                  fontSize={10}
+                  letterSpacing={1.4}
                   fontFamily={MONO_STACK}
-                  fill={accent}
+                  fill={COLORS.enemy}
                   stroke={COLORS.void}
-                  strokeWidth={3.5}
+                  strokeWidth={3.2}
                   paintOrder="stroke"
                 >
-                  -{clash.removed}
+                  {block.reason === 'edge' ? 'EDGE' : 'BLOCKED'}
                 </text>
-                {clash.flank && (
-                  <text
-                    x={to.x}
-                    y={to.y - 48}
-                    textAnchor="middle"
-                    fontSize={9}
-                    letterSpacing={2}
-                    fontFamily={MONO_STACK}
-                    fill={COLORS.focus}
-                  >
-                    FLANK
-                  </text>
-                )}
               </g>
             )
           }),
         )}
+      </g>
+
+      {/* ---- combat beats ----
+          One beat per pair, and when several land on the same tick they are
+          strung together so the simultaneity reads while scrubbing. */}
+      <g>
+        {frames.flatMap((frame, index) => {
+          const nearness = 1 - Math.min(1, Math.abs(playhead - index) / 0.75)
+          if (nearness <= 0.02 || frame.clashes.length === 0) return []
+          const crowd = 1 / (1 + 0.34 * (frame.clashes.length - 1))
+          const mids = frame.clashes.map((clash) => {
+            const from = center(clash.playerHex)
+            const to = center(clash.enemyHex)
+            return { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 }
+          })
+          const chain =
+            mids.length > 1
+              ? mids
+                  .map((point, i) => `${i === 0 ? 'M' : 'L'} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`)
+                  .join(' ')
+              : null
+
+          return [
+            chain && (
+              // several fights landing on the same tick, strung together
+              <g key={`chain-${index}`} opacity={nearness}>
+                <path
+                  d={chain}
+                  fill="none"
+                  stroke={COLORS.focus}
+                  strokeOpacity={0.34}
+                  strokeWidth={0.9}
+                  strokeDasharray="1 6"
+                />
+                {mids.map((point, i) => (
+                  <rect
+                    key={i}
+                    x={point.x - 4}
+                    y={point.y - 4}
+                    width={8}
+                    height={8}
+                    transform={`rotate(45 ${point.x} ${point.y})`}
+                    fill={COLORS.focus}
+                    fillOpacity={0.85}
+                  />
+                ))}
+              </g>
+            ),
+            ...frame.clashes.map((clash, order) => {
+              const from = center(clash.playerHex)
+              const to = center(clash.enemyHex)
+              const mid = mids[order]
+              const grow = 1 - nearness
+              const flank = clash.playerFlanked || clash.enemyFlanked
+              const accent = flank ? COLORS.focus : '#FFD9A0'
+              const outward = unitVector(mid, from)
+              const sideways = { x: -outward.y, y: outward.x }
+              const playerTag = {
+                x: from.x + outward.x * 38 + sideways.x * 9,
+                y: from.y + outward.y * 38 + sideways.y * 9,
+              }
+              const enemyTag = {
+                x: to.x - outward.x * 38 + sideways.x * 9,
+                y: to.y - outward.y * 38 + sideways.y * 9,
+              }
+              return (
+                <g key={`clash-${index}-${clash.playerId}-${clash.enemyId}`} opacity={nearness}>
+                  <circle
+                    cx={mid.x}
+                    cy={mid.y}
+                    r={(10 + grow * 52) * crowd}
+                    fill="none"
+                    stroke={accent}
+                    strokeWidth={3.2 * nearness + 0.4}
+                    filter="url(#rp-glow)"
+                  />
+                  <circle
+                    cx={mid.x}
+                    cy={mid.y}
+                    r={(4 + grow * 26) * crowd}
+                    fill="none"
+                    stroke={accent}
+                    strokeOpacity={0.5}
+                    strokeWidth={1.4}
+                  />
+                  {[0, 60, 120, 180, 240, 300].map((spark) => {
+                    const a = polar(mid, spark + grow * 22, (12 + grow * 30) * crowd)
+                    const b = polar(mid, spark + grow * 22, (22 + grow * 46) * crowd)
+                    return (
+                      <line
+                        key={spark}
+                        x1={a.x}
+                        y1={a.y}
+                        x2={b.x}
+                        y2={b.y}
+                        stroke={accent}
+                        strokeOpacity={0.7 * nearness}
+                        strokeWidth={1.5}
+                        strokeLinecap="round"
+                      />
+                    )
+                  })}
+                  <line
+                    x1={from.x}
+                    y1={from.y}
+                    x2={to.x}
+                    y2={to.y}
+                    stroke={accent}
+                    strokeWidth={1.2}
+                    strokeOpacity={0.55}
+                    strokeDasharray="3 4"
+                  />
+                  <LossTag
+                    at={playerTag}
+                    amount={clash.playerLoss}
+                    color={COLORS.player}
+                    flank={clash.playerFlanked}
+                  />
+                  <LossTag
+                    at={enemyTag}
+                    amount={clash.enemyLoss}
+                    color={COLORS.enemy}
+                    flank={clash.enemyFlanked}
+                  />
+                </g>
+              )
+            }),
+          ]
+        })}
       </g>
 
       {/* ---- motion trails ---- */}
@@ -332,7 +461,7 @@ function Board({
           snapshot
             .filter((unit) => unit.moving)
             .map((unit) => (
-              <g key={`trail-${unit.id}-${depth}`} opacity={0.3 - depth * 0.08}>
+              <g key={`trail-${unit.id}-${depth}`} opacity={0.26 - depth * 0.07}>
                 <circle cx={unit.x} cy={unit.y} r={20 - depth} fill={sideColor(unit.side)} fillOpacity={0.12} />
                 <path d={noseWedge({ x: unit.x, y: unit.y }, unit.angle, 21, 31, 22)} fill={sideColor(unit.side)} fillOpacity={0.35} />
               </g>
@@ -340,29 +469,45 @@ function Board({
         )}
       </g>
 
+      {/* a soft well of darkness under the cluster, so it reads over a
+          crowded board without swallowing the unit it belongs to */}
+      {selected && editable && selected.side === 'player' && (
+        <circle
+          cx={selected.x}
+          cy={selected.y}
+          r={104}
+          fill="url(#rp-cluster-well)"
+          pointerEvents="none"
+        />
+      )}
+
       {/* ---- live tokens ---- */}
       <g>
-        {live.map((unit) => {
-          const snapshot = start.units.find((candidate) => candidate.id === unit.id)
-          const spent = spentPoints(orders[unit.id] ?? [])
-          const isSelected = unit.id === selectedId
-          return (
-            <Token
-              key={unit.id}
-              unit={unit}
-              snapshot={snapshot}
-              spent={spent}
-              selected={isSelected}
-              editable={editable}
-              onSelect={() => onSelect(unit.id)}
-              onHold={() => onOrder('hold')}
-            />
-          )
-        })}
+        {/* the selected file paints last, so a crowded neighbour never
+            covers the unit you are giving orders to */}
+        {[...live]
+          .sort((a, b) => Number(a.id === selectedId) - Number(b.id === selectedId))
+          .map((unit) => {
+            const spent = spentPoints(orders[unit.id] ?? [])
+            const isSelected = unit.id === selectedId
+            return (
+              <Token
+                key={unit.id}
+                unit={unit}
+                spent={spent}
+                selected={isSelected}
+                dimmed={selectedId !== null && !isSelected}
+                editable={editable}
+                showPoints={editable && unit.side === 'player'}
+                onSelect={() => onSelect(unit.id)}
+                onHold={() => onOrder('hold')}
+              />
+            )
+          })}
       </g>
 
       {/* ---- the radial order cluster ---- */}
-      {selected && editable && (
+      {selected && editable && selected.side === 'player' && (
         <RadialControls
           cx={selected.x}
           cy={selected.y}
@@ -374,8 +519,11 @@ function Board({
             right: view.left + view.width,
             bottom: view.top + view.height,
           }}
-          moveBlocked={moveBlocked}
-          exhausted={selectedSpent >= TICKS || selected.side === 'enemy'}
+          avoid={live
+            .filter((unit) => unit.id !== selected.id)
+            .map((unit) => ({ x: unit.x, y: unit.y }))}
+          advance={advance}
+          exhausted={selectedSpent >= TICKS}
           onOrder={onOrder}
           onClose={() => onSelect(null)}
         />
@@ -384,25 +532,90 @@ function Board({
   )
 }
 
+function LossTag({
+  at,
+  amount,
+  color,
+  flank,
+}: {
+  at: Point
+  amount: number
+  color: string
+  flank: boolean
+}) {
+  return (
+    <g>
+      <text
+        x={at.x}
+        y={at.y + 5}
+        textAnchor="middle"
+        fontSize={17}
+        fontFamily={MONO_STACK}
+        fill={color}
+        stroke={COLORS.void}
+        strokeWidth={3.5}
+        paintOrder="stroke"
+      >
+        -{amount}
+      </text>
+      {flank && (
+        <text
+          x={at.x}
+          y={at.y + 16}
+          textAnchor="middle"
+          fontSize={8}
+          letterSpacing={1.8}
+          fontFamily={MONO_STACK}
+          fill={COLORS.focus}
+          stroke={COLORS.void}
+          strokeWidth={2.6}
+          paintOrder="stroke"
+        >
+          FLANKED
+        </text>
+      )}
+    </g>
+  )
+}
+
 interface TokenProps {
   unit: RenderUnit
-  snapshot: UnitSnapshot | undefined
   spent: number
   selected: boolean
+  dimmed: boolean
   editable: boolean
+  /** Draw the three order-point arcs (planning, player side). */
+  showPoints: boolean
   onSelect: () => void
   onHold: () => void
 }
 
-function Token({ unit, snapshot, spent, selected, editable, onSelect, onHold }: TokenProps) {
+function Token({
+  unit,
+  spent,
+  selected,
+  dimmed,
+  editable,
+  showPoints,
+  onSelect,
+  onHold,
+}: TokenProps) {
   const accent = sideColor(unit.side)
   const incomplete = spent < TICKS
-  const pips = Array.from({ length: TICKS }, (_, index) => index)
   const canHold = selected && editable && unit.side === 'player' && incomplete
+  // The three point arcs sit around the token with their gaps on the facing,
+  // so the nose wedge always shows through.
+  const points = Array.from({ length: TICKS }, (_, index) => ({
+    index,
+    from: unit.angle + 7 + index * 120,
+    to: unit.angle + 113 + index * 120,
+    filled: index < spent,
+  }))
 
   return (
     <g
       transform={`translate(${unit.x.toFixed(2)} ${unit.y.toFixed(2)})`}
+      opacity={dimmed ? 0.62 : 1}
       role="button"
       tabIndex={0}
       aria-label={
@@ -425,18 +638,24 @@ function Token({ unit, snapshot, spent, selected, editable, onSelect, onHold }: 
         }
       }}
     >
-      {/* unspent points still to assign */}
-      {incomplete && snapshot && (
-        <polygon
-          className="rp-pulse"
-          points={hexCorners({ x: 0, y: 0 }, HEX_SIZE * 0.95)
-            .map((corner) => `${corner.x.toFixed(2)},${corner.y.toFixed(2)}`)
-            .join(' ')}
-          fill="none"
-          stroke={COLORS.focus}
-          strokeWidth={1.6}
-          strokeDasharray="5 6"
-        />
+      {/* three order points, spent arcs solid and unspent arcs amber:
+          the whole roster's state readable from the board alone */}
+      {showPoints && (
+        <g className={spent === 0 ? 'rp-pulse-soft' : undefined}>
+          {points.map((point) => (
+            <path
+              key={point.index}
+              d={arc(POINT_RING, point.from, point.to)}
+              fill="none"
+              stroke={point.filled ? accent : COLORS.focus}
+              strokeOpacity={point.filled ? 0.95 : 0.7}
+              strokeWidth={point.filled ? 3.2 : 1.6}
+              strokeDasharray={point.filled ? undefined : '3 4'}
+              strokeLinecap="round"
+              filter={point.filled && selected ? 'url(#rp-glow)' : undefined}
+            />
+          ))}
+        </g>
       )}
       <circle r={38} fill={accent} fillOpacity={selected ? 0.07 : 0.03} />
       <path
@@ -449,13 +668,25 @@ function Token({ unit, snapshot, spent, selected, editable, onSelect, onHold }: 
         r={21}
         fill={`url(#rp-token-${unit.side})`}
         stroke={accent}
-        strokeWidth={selected ? 2.2 : 1.5}
+        strokeWidth={selected ? 2.6 : 1.5}
       />
       <circle r={17} fill="none" stroke={accent} strokeOpacity={0.3} strokeWidth={0.8} />
       <text
         textAnchor="middle"
-        y={6.5}
-        fontSize={19}
+        y={-5}
+        fontSize={9}
+        letterSpacing={1.4}
+        fontFamily={MONO_STACK}
+        fill={accent}
+        fillOpacity={0.95}
+        pointerEvents="none"
+      >
+        {unit.sigil}
+      </text>
+      <text
+        textAnchor="middle"
+        y={12}
+        fontSize={16}
         fontFamily={MONO_STACK}
         fill={COLORS.text}
         letterSpacing={-0.5}
@@ -463,26 +694,6 @@ function Token({ unit, snapshot, spent, selected, editable, onSelect, onHold }: 
       >
         {unit.models}
       </text>
-      <g
-        transform={`translate(${-((TICKS - 1) * 9) / 2} 31)`}
-        pointerEvents="none"
-        opacity={selected ? 0 : 1}
-      >
-        {pips.map((index) => (
-          <rect
-            key={index}
-            x={index * 9 - 3}
-            y={-3}
-            width={6}
-            height={6}
-            transform={`rotate(45 ${index * 9} 0)`}
-            fill={index < spent ? accent : 'none'}
-            stroke={index < spent ? accent : COLORS.focus}
-            strokeOpacity={index < spent ? 1 : 0.75}
-            strokeWidth={1}
-          />
-        ))}
-      </g>
       <circle
         className="rp-focus-ring"
         r={26}

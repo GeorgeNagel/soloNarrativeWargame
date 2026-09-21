@@ -177,15 +177,94 @@ export const CSS = `
 .tc-readrow.warn > b{color:var(--warn);}
 .tc-readrow.hot > b{color:var(--enm);}
 
-.tc-plan{padding:8px 9px;display:flex;flex-direction:column;gap:5px;}
-.tc-planrow{display:grid;grid-template-columns:52px repeat(3,1fr);gap:3px;align-items:stretch;}
-.tc-planrow > i{font-style:normal;font-size:9px;letter-spacing:.1em;color:var(--dim);display:flex;align-items:center;}
-.tc-planrow em{
-  font-style:normal;font-size:10px;letter-spacing:.06em;text-align:center;padding:3px 0;
-  border:1px solid var(--line);background:#070d12;color:var(--bright);
+/* ── order matrix: roster, status and selector in one block ── */
+.tc-plan{padding:7px 9px 8px;display:flex;flex-direction:column;gap:3px;}
+.tc-mrow{
+  display:grid;grid-template-columns:62px repeat(3,1fr) 30px;gap:3px;align-items:stretch;
+  position:relative;padding-left:4px;
 }
-.tc-planrow em.none{color:#2c414f;}
-.tc-planrow.head em{color:var(--dim);background:transparent;border-color:transparent;font-size:8px;letter-spacing:.16em;}
+.tc-mrow.sel{background:var(--raised);box-shadow:inset 0 0 0 1px var(--line);}
+.tc-mrow.sel::before{content:'';position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--accent);}
+.tc-mrow.head{color:var(--dim);}
+.tc-mtag{
+  border:none;background:none;font:inherit;font-size:10px;letter-spacing:.06em;
+  color:var(--accent);display:flex;align-items:center;gap:4px;padding:0;cursor:pointer;
+  text-align:left;min-width:0;
+}
+.tc-mrow.head .tc-mtag{color:var(--dim);font-size:8px;letter-spacing:.16em;cursor:default;}
+.tc-mrow.ai .tc-mtag{opacity:.85;}
+.tc-dot{width:6px;height:6px;flex:0 0 6px;border:1px solid var(--warn);background:transparent;}
+.tc-dot.part{background:var(--warn);opacity:.55;}
+.tc-dot.armed{border-color:var(--plr);background:var(--plr);}
+.tc-mrow.ai .tc-dot{border-color:var(--dim);background:var(--dim);opacity:.5;}
+.tc-cell{
+  font:inherit;font-size:10px;letter-spacing:.04em;text-align:center;padding:4px 0;
+  border:1px solid var(--line);background:#070d12;color:var(--bright);cursor:pointer;
+  transition:border-color .12s,background .12s,color .12s;
+}
+.tc-cell.none{color:#2c414f;}
+.tc-cell.filled{color:var(--accent);border-color:#1d3441;}
+.tc-cell.focus{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent);background:#0d1b22;}
+.tc-cell.live{border-color:var(--warn);color:var(--warn);background:#191305;}
+.tc-cell.past{opacity:.4;}
+.tc-cell:disabled{cursor:default;}
+/* OPFOR orders are fixed, so they read as reference rather than as controls. */
+.tc-mrow.ai .tc-cell{color:var(--dim);background:#060b10;}
+.tc-mrow.ai .tc-mcount{color:var(--dim);opacity:.7;}
+.tc-mrow.head .tc-cell{border-color:transparent;background:transparent;color:var(--dim);font-size:8px;letter-spacing:.16em;padding:2px 0;}
+.tc-mcount{font-size:9px;letter-spacing:.02em;color:var(--dim);display:flex;align-items:center;justify-content:flex-end;}
+.tc-mcount.part{color:var(--warn);}
+.tc-mcount.armed{color:var(--plr);}
+.tc-mrow.head .tc-mcount{font-size:8px;letter-spacing:.1em;}
+.tc-mdiv{
+  display:flex;align-items:center;gap:6px;margin:4px 0 2px;
+  font-size:8px;letter-spacing:.16em;color:var(--dim);
+}
+.tc-mdiv::after{content:'';flex:1;border-top:1px dashed var(--line);}
+
+/* ── forecast table ────────────────────────────────────── */
+.tc-fc{padding:6px 9px 8px;display:flex;flex-direction:column;gap:2px;}
+.tc-fcrow{
+  display:grid;grid-template-columns:74px 46px 46px 1fr auto;gap:5px;align-items:center;
+  font-size:10px;letter-spacing:.03em;color:var(--text);padding:2px 0;
+  border-bottom:1px dotted var(--line);
+}
+.tc-fcrow:last-child{border-bottom:none;}
+.tc-fcrow > i{
+  font-style:normal;color:var(--bright);font-size:10px;letter-spacing:.06em;
+  display:flex;align-items:center;gap:4px;
+}
+.tc-fcrow > span{white-space:nowrap;}
+.tc-fcrow > span > small{color:var(--dim);margin:0 1px;}
+.tc-fcrow > span.ok{color:var(--plr);}
+.tc-fcrow > span.hot{color:var(--enm);}
+.tc-fcrow > span.dim{color:var(--dim);}
+.tc-fcrow > b{font-weight:600;text-align:right;white-space:nowrap;color:var(--dim);}
+.tc-fcrow > b em{font-style:normal;}
+.tc-fcrow > b em.ok{color:var(--plr);}
+.tc-fcrow > b em.hot{color:var(--enm);}
+.tc-fcrow.hit > i{color:var(--warn);}
+.tc-fcrow.head{color:var(--dim);font-size:8px;letter-spacing:.14em;border-bottom:1px solid var(--line);}
+.tc-fcrow.head > i,.tc-fcrow.head > b{color:var(--dim);font-size:8px;letter-spacing:.14em;}
+.tc-flag{
+  font-style:normal;font-size:8px;letter-spacing:.1em;color:var(--warn);
+  border:1px solid var(--warn);padding:0 3px;line-height:1.4;
+}
+.tc-empty{padding:9px;font-size:9px;letter-spacing:.12em;color:var(--dim);}
+
+.tc-legend{padding:6px 9px 10px;display:flex;flex-direction:column;gap:3px;}
+.tc-legendrow{display:grid;grid-template-columns:70px 1fr;gap:6px;font-size:9px;letter-spacing:.06em;}
+.tc-legendrow > i{font-style:normal;color:var(--text);letter-spacing:.1em;}
+.tc-legendrow > span{color:var(--dim);}
+
+.tc-step{
+  border:1px solid var(--line);background:#0b141b;color:var(--dim);font:inherit;
+  font-size:12px;line-height:1;padding:2px 6px;cursor:pointer;
+}
+.tc-step:hover:not(:disabled){color:var(--accent);border-color:var(--accent);}
+.tc-step:disabled{opacity:.35;cursor:default;}
+.tc-mini.go{color:var(--plr);border-color:#1c4a44;}
+.tc-mini.go:hover:not(:disabled){color:#041310;background:var(--plr);border-color:var(--plr);}
 
 /* ── commit bar ────────────────────────────────────────── */
 .tc-foot{
@@ -207,26 +286,27 @@ export const CSS = `
 .tc-rot{transition:transform 520ms cubic-bezier(.4,0,.22,1);}
 /* SVG: transform-origin resolves against the whole viewBox unless the box is
    switched to the element itself — without this, every scale() drifts. */
-.tc-float,.tc-floatd,.tc-burst,.tc-scan{transform-box:fill-box;transform-origin:center;}
-.tc-float{animation:tc-float 820ms ease-out forwards;}
+.tc-float,.tc-floatd,.tc-burst,.tc-scan,.tc-blocked{transform-box:fill-box;transform-origin:center;}
+/* fill-mode both, not forwards: staggered beats stay hidden through their delay. */
+.tc-float{animation:tc-float 820ms ease-out both;}
 @keyframes tc-float{
   0%{opacity:0;transform:translateY(5px) scale(.7)}
   18%{opacity:1;transform:translateY(-2px) scale(1.12)}
   100%{opacity:0;transform:translateY(-20px) scale(1)}
 }
-.tc-floatd{animation:tc-floatd 820ms ease-out forwards;}
+.tc-floatd{animation:tc-floatd 820ms ease-out both;}
 @keyframes tc-floatd{
   0%{opacity:0;transform:translateY(-5px) scale(.7)}
   18%{opacity:1;transform:translateY(2px) scale(1.12)}
   100%{opacity:0;transform:translateY(20px) scale(1)}
 }
-.tc-edge{animation:tc-edge 820ms ease-out forwards;}
+.tc-edge{animation:tc-edge 820ms ease-out both;}
 @keyframes tc-edge{
   0%{opacity:0}
   16%{opacity:1}
   100%{opacity:0}
 }
-.tc-burst{animation:tc-burst 820ms ease-out forwards;}
+.tc-burst{animation:tc-burst 820ms ease-out both;}
 @keyframes tc-burst{
   0%{opacity:0;transform:scale(.3) rotate(-25deg)}
   20%{opacity:1;transform:scale(1) rotate(0deg)}
@@ -236,6 +316,13 @@ export const CSS = `
 @keyframes tc-scan{
   0%{opacity:.85;transform:scale(.4)}
   100%{opacity:0;transform:scale(1.35)}
+}
+.tc-blocked{animation:tc-blocked 620ms ease-out both;}
+@keyframes tc-blocked{
+  0%{opacity:0;transform:translateY(4px) scale(.85)}
+  22%{opacity:1;transform:translateY(0) scale(1)}
+  70%{opacity:1}
+  100%{opacity:0;transform:translateY(-3px)}
 }
 .tc-shake{animation:tc-shake 400ms ease-in-out;}
 @keyframes tc-shake{
@@ -258,11 +345,26 @@ export const CSS = `
     border-right:none;border-bottom:1px solid var(--lineHot);padding:6px 8px 7px;
   }
   .tc-stage-rail.foot{display:none;}
-  .tc-boardwrap{max-width:min(100%, 40vh);}
+  .tc-boardwrap{max-width:min(100%, 33vh);}
   .tc-panel{width:auto;flex:1 1 auto;}
   .tc-panel-scroll{overflow-y:visible;}
   .tc-foot{position:sticky;bottom:0;z-index:6;padding:7px 8px;}
   .tc-foot .tc-v{font-size:10px;}
   .tc-commit{padding:11px 12px;font-size:11px;letter-spacing:.1em;}
+
+  .tc-wide{display:none;}
+  /* every row loses a pixel or two so the order pad clears the commit bar */
+  .tc-sect{padding:4px 8px;}
+  .tc-plan{padding:5px 8px 6px;gap:2px;}
+  .tc-mrow{grid-template-columns:58px repeat(3,1fr) 28px;}
+  .tc-cell{padding:3px 0;}
+  .tc-mdiv{margin:2px 0 1px;}
+  .tc-fc{padding:3px 8px 5px;gap:0;}
+  .tc-fcrow{padding:1px 0;grid-template-columns:70px 42px 42px 1fr auto;}
+  .tc-card{padding:6px 8px 8px;}
+  .tc-stats,.tc-slots{margin-top:5px;}
+  .tc-slot{min-height:40px;}
+  .tc-pad{margin-top:5px;}
+  .tc-btn{padding:5px 2px;}
 }
 `
