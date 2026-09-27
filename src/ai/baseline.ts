@@ -73,3 +73,8 @@ export const closeOnNearest: Commander = {
  * `docs/ai-opponent.md` loses badly to a line that simply stands and shoots.
  */
 export const BASELINES: readonly Commander[] = [closeOnNearest, holdFast]
+
+/** A baseline by the id a checkpoint stored, or null if the name is unknown. */
+export function baselineById(id: string): Commander | null {
+  return BASELINES.find((opponent) => opponent.id === id) ?? null
+}

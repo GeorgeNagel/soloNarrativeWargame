@@ -21,6 +21,12 @@ export interface Rng {
   pick<T>(items: readonly T[]): T
   /** A fresh, independent generator, so nested work cannot disturb this stream. */
   fork(label: number): Rng
+  /**
+   * The whole of this generator's state, as one 32-bit number. A checkpoint
+   * stores it so a resumed run carries on the same stream rather than starting
+   * a new one.
+   */
+  state(): number
 }
 
 /** Mix a 32-bit seed so nearby seeds produce unrelated streams. */
@@ -33,7 +39,15 @@ function scramble(seed: number): number {
 
 /** Mulberry32 — 32 bits of state, good enough for search and fully portable. */
 export function makeRng(seed: number): Rng {
-  let state = scramble(seed)
+  return rngFromState(scramble(seed))
+}
+
+/**
+ * Pick a generator up mid-stream, from the state a previous one reported. This
+ * is what makes a resumed run identical to one that never stopped.
+ */
+export function rngFromState(saved: number): Rng {
+  let state = saved >>> 0
 
   const next = (): number => {
     state = (state + 0x6d2b79f5) >>> 0
@@ -53,6 +67,7 @@ export function makeRng(seed: number): Rng {
       return items[rng.int(items.length)]
     },
     fork: (label) => makeRng(scramble(state ^ scramble(label + 1))),
+    state: () => state,
   }
 
   return rng

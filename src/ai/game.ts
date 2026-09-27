@@ -5,8 +5,9 @@
  * `resolveRound` runs exactly as it does under the console — same rules, same
  * dice, only the dice come from a seeded stream so a game replays.
  */
-import { isAlive, type Side, type UnitState } from '../prototypes/tactical/model'
+import { isAlive, type OrderBook, type Side, type UnitState } from '../prototypes/tactical/model'
 import { resolveRound, survivors } from '../prototypes/tactical/sim'
+import type { RoundResult } from '../prototypes/tactical/sim'
 import { strengthOf } from './features'
 import { rosterOf } from './roster'
 import type { Roster } from './roster'
@@ -44,8 +45,20 @@ export interface GameOutcome {
   roster: Roster
 }
 
+/** One resolved round, for a caller watching a game go by. */
+export interface RoundTrace {
+  round: number
+  /** The board as the round opened. */
+  before: UnitState[]
+  /** Both sides' orders, merged the way the round took them. */
+  orders: OrderBook
+  result: RoundResult
+}
+
 export interface GameOptions {
   roundCap?: number
+  /** Called for each resolved round, in order. */
+  onRound?: (trace: RoundTrace) => void
 }
 
 function positionsOf(units: UnitState[]): string {
@@ -89,6 +102,7 @@ export function playGame(
       ...enemy.orders(board, 'enemy', round, roster),
     }
     const result = resolveRound(board, orders, roll)
+    options.onRound?.({ round, before: board, orders, result })
     board = survivors(result)
     rounds = round
 

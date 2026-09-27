@@ -130,9 +130,51 @@ a line that never had to turn. Charging is a losing move in these rules as they
 stand. It is worth knowing before tuning anything: an evolved AI that draws with
 `hold-fast` has found the same equilibrium, not failed to learn.
 
-## Flags
+## Checkpoints, and what a run leaves behind
 
-`npm run evolve -- --help` lists them. The ones that matter most:
+Runs are kept. Each one writes a directory under `artifacts/runs/<run-id>/`,
+committed to the repository — `artifacts/README.md` has the layout, and
+`src/ai/checkpoint.ts` the code.
+
+A **checkpoint** is a whole paused run: the ranked population, the curve so far,
+and the random generator's state. That last part is what makes resuming exact
+rather than approximate — a run stopped at generation 20 and resumed is identical
+to one that never stopped, which `src/ai/checkpoint.test.ts` asserts by running
+both and comparing. Checkpoints land every `--every` generations and always at the
+last one.
+
+```
+npm run evolve -- --resume artifacts/runs/<run-id>/checkpoints/gen-0040.json --gens 80
+```
+
+Everything but the generation count is taken from the checkpoint. Changing the
+population size or the scoring mid-run would make the curve meaningless, so those
+flags are ignored when resuming. A resumed run writes back into the run directory
+it came from, so its later checkpoints sit next to the earlier ones.
+
+Genomes are plain data — trees of numbers and orders — so nothing needs reviving
+on load. Everything read off disk is **validated** rather than trusted, since these
+files are committed and therefore hand-editable: a bad field fails with its own
+name. The one thing tolerated is a branch on a feature this build no longer has,
+which reads as zero, so an older checkpoint still loads after a feature is renamed.
+
+## The two scripts
+
+`npm run evolve` runs the algorithm. `npm run ai:play` plays a genome that was
+already written down, with no evolution around it:
+
+```
+npm run ai:play -- --genome artifacts/runs/<run-id>/champion.json --vs hold-fast
+npm run ai:play -- --genome artifacts/runs/<run-id>/champion.json --trace --describe
+```
+
+`--vs` takes a baseline name or another genome file, so two saved champions can be
+played off against each other. `--trace` prints one game round by round — every
+unit's order, every shot and melee, and what it cost — which is the quickest way
+to see *why* an evolved AI does what it does. `--describe` prints its trees.
+
+`npm run evolve -- --help` and `npm run ai:play -- --help` list every flag. The
+ones that matter most:
 
 | Flag | Default | What it does |
 | --- | --- | --- |
@@ -144,10 +186,10 @@ stand. It is worth knowing before tuning anything: an evolved AI that draws with
 | `--mutation` | 0.15 | per-node chance of mutation when a child is made |
 | `--elites` | 2 | best genomes carried over untouched |
 | `--bench` | 12 | benchmark scenarios per generation; 0 skips it |
-| `--out` | `artifacts/champion.json` | run report and champion genome |
-
-The champion is written as plain JSON — the trees are data, so a saved genome can
-be read back and played without the evolution around it.
+| `--every` | 10 | checkpoint interval; 0 writes only the last |
+| `--resume` | — | carry on from a checkpoint |
+| `--out-dir` | `artifacts` | where runs are written |
+| `--run-id` | from the settings | names this run's directory |
 
 ## Known limits
 

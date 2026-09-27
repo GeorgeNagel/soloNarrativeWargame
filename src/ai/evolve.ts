@@ -184,6 +184,23 @@ export function nextGeneration(
   return population
 }
 
+/**
+ * A run, paused between generations: everything needed to carry on, and nothing
+ * more. A checkpoint is this state written down (see `checkpoint.ts`), which is
+ * why the generator's state travels with it — a resumed run continues the same
+ * stream instead of starting a new one.
+ */
+export interface RunState {
+  /** The generation the population has just been ranked in. */
+  generation: number
+  /** The population, in ranked order. */
+  standings: Standing[]
+  /** One report per generation so far, oldest first. */
+  reports: GenerationReport[]
+  /** The generator that breeds the next generation. */
+  rng: Rng
+}
+
 function mean(values: number[]): number {
   if (values.length === 0) return 0
   return values.reduce((total, value) => total + value, 0) / values.length
@@ -220,38 +237,89 @@ function report(
   }
 }
 
+/** The tournament for one generation of a run, seeded from the run's seed. */
+function rank(
+  population: Genome[],
+  generation: number,
+  options: ResolvedOptions,
+): Standing[] {
+  return runTournament(population, {
+    gamesPerPairing: options.gamesPerPairing,
+    seed: seedFrom(options.seed, generation),
+    roundCap: options.roundCap,
+  })
+}
+
+/** Generation zero: a random population, ranked. */
+export function startRun(
+  options: ResolvedOptions,
+  specs: GenomeSpecs = makeGenomeSpecs(options.maxDepth),
+): RunState {
+  const rng = makeRng(options.seed)
+  const standings = rank(initialPopulation(options.populationSize, rng, specs), 0, options)
+  return { generation: 0, standings, reports: [report(0, standings, options)], rng }
+}
+
 /**
- * Run the whole thing. `onGeneration` is called as each generation is ranked, so
- * a CLI can print the curve while it runs.
+ * One generation on: breed from the ranking, then rank the children. Returns a
+ * new state and leaves the one passed in alone, so a caller can checkpoint the
+ * state it holds without racing the next step.
+ */
+export function stepRun(
+  state: RunState,
+  options: ResolvedOptions,
+  specs: GenomeSpecs = makeGenomeSpecs(options.maxDepth),
+): RunState {
+  const generation = state.generation + 1
+  const population = nextGeneration(
+    state.standings,
+    generation,
+    state.rng,
+    options,
+    specs,
+  )
+  const standings = rank(population, generation, options)
+  return {
+    generation,
+    standings,
+    reports: [...state.reports, report(generation, standings, options)],
+    rng: state.rng,
+  }
+}
+
+export interface EvolveHooks {
+  /** Called as each generation is ranked, including generation zero. */
+  onGeneration?: (report: GenerationReport, state: RunState) => void
+}
+
+/**
+ * Run the whole thing, from scratch or from a state a checkpoint was read into.
+ *
+ * `hooks.onGeneration` fires as each generation is ranked, which is where a CLI
+ * prints the curve and writes its checkpoints.
  */
 export function evolve(
   options: EvolveOptions = {},
-  onGeneration?: (report: GenerationReport) => void,
+  hooks: EvolveHooks | ((report: GenerationReport) => void) = {},
+  from?: RunState,
 ): EvolveResult {
   const resolved = resolveOptions(options)
   const specs = makeGenomeSpecs(resolved.maxDepth)
-  const rng = makeRng(resolved.seed)
+  const onGeneration =
+    typeof hooks === 'function' ? (report: GenerationReport) => hooks(report) : hooks.onGeneration
 
-  let population = initialPopulation(resolved.populationSize, rng, specs)
-  let standings = runTournament(population, {
-    gamesPerPairing: resolved.gamesPerPairing,
-    seed: seedFrom(resolved.seed, 0),
-    roundCap: resolved.roundCap,
-  })
-  const reports: GenerationReport[] = [report(0, standings, resolved)]
-  onGeneration?.(reports[0])
+  let state = from ?? startRun(resolved, specs)
+  if (!from) onGeneration?.(state.reports[state.reports.length - 1], state)
 
-  for (let generation = 1; generation <= resolved.generations; generation += 1) {
-    population = nextGeneration(standings, generation, rng, resolved, specs)
-    standings = runTournament(population, {
-      gamesPerPairing: resolved.gamesPerPairing,
-      seed: seedFrom(resolved.seed, generation),
-      roundCap: resolved.roundCap,
-    })
-    const generationReport = report(generation, standings, resolved)
-    reports.push(generationReport)
-    onGeneration?.(generationReport)
+  while (state.generation < resolved.generations) {
+    state = stepRun(state, resolved, specs)
+    onGeneration?.(state.reports[state.reports.length - 1], state)
   }
 
-  return { options: resolved, reports, standings, champion: standings[0].genome }
+  return {
+    options: resolved,
+    reports: state.reports,
+    standings: state.standings,
+    champion: state.standings[0].genome,
+  }
 }

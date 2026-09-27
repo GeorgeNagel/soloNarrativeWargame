@@ -1,22 +1,29 @@
 /**
- * `npm run evolve` — run the genetic algorithm and write out the champion.
+ * `npm run evolve` — run the genetic algorithm and write the run down.
  *
  * Every knob has a flag and every run is reproducible from `--seed`, so a result
- * can be re-derived from the line that produced it.
+ * can be re-derived from the line that produced it. Checkpoints are written as
+ * the run goes, and `--resume` picks one up and carries on the same stream.
  */
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import process from 'node:process'
-import { UNIT_TYPES } from '../prototypes/tactical/model'
-import type { RoundOrder } from '../prototypes/tactical/model'
-import { orderCode } from '../prototypes/tactical/model'
 import { BASELINES } from './baseline'
+import {
+  checkpointName,
+  curveCsv,
+  fromCheckpoint,
+  parseCheckpoint,
+  runPaths,
+  serializeOptions,
+  toCheckpoint,
+} from './checkpoint'
+import type { RunPaths } from './checkpoint'
+import { describeGenome } from './describe'
 import { DEFAULTS, evolve } from './evolve'
-import type { GenerationReport } from './evolve'
+import type { GenerationReport, ResolvedOptions, RunState } from './evolve'
 import { genomeSize } from './genome'
-import type { Genome } from './genome'
 import { benchmark } from './tournament'
-import { describeTree } from './tree'
 
 interface Flags {
   pop: number
@@ -28,23 +35,29 @@ interface Flags {
   elites: number
   cap: number
   bench: number
-  out: string
+  outDir: string
+  runId: string | null
+  checkpointEvery: number
+  resume: string | null
   quiet: boolean
 }
 
 const USAGE = `Usage: npm run evolve -- [flags]
 
-  --pop N        population size (default ${DEFAULTS.populationSize})
-  --gens N       generations to run (default ${DEFAULTS.generations})
-  --games N      scenarios per pairing, each played from both sides (default ${DEFAULTS.gamesPerPairing})
-  --seed N       seed for the whole run (default ${DEFAULTS.seed})
-  --depth N      maximum tree depth (default ${DEFAULTS.maxDepth})
-  --mutation P   per-node mutation chance (default ${DEFAULTS.mutationRate})
-  --elites N     top genomes carried over untouched (default ${DEFAULTS.elites})
-  --cap N        rounds before a game is a draw (default ${DEFAULTS.roundCap})
-  --bench N      benchmark scenarios per generation, 0 to skip (default ${DEFAULTS.benchmarkGames})
-  --out PATH     where to write the champion (default artifacts/champion.json)
-  --quiet        only print the final report
+  --pop N          population size (default ${DEFAULTS.populationSize})
+  --gens N         generations to run (default ${DEFAULTS.generations})
+  --games N        scenarios per pairing, each played from both sides (default ${DEFAULTS.gamesPerPairing})
+  --seed N         seed for the whole run (default ${DEFAULTS.seed})
+  --depth N        maximum tree depth (default ${DEFAULTS.maxDepth})
+  --mutation P     per-node mutation chance (default ${DEFAULTS.mutationRate})
+  --elites N       top genomes carried over untouched (default ${DEFAULTS.elites})
+  --cap N          rounds before a game is a draw (default ${DEFAULTS.roundCap})
+  --bench N        benchmark scenarios per generation, 0 to skip (default ${DEFAULTS.benchmarkGames})
+  --out-dir DIR    where runs are written (default artifacts)
+  --run-id NAME    names this run's directory (default from the settings)
+  --every N        write a checkpoint every N generations, 0 for the last only (default 10)
+  --resume PATH    carry on from a checkpoint, up to --gens
+  --quiet          only print the final report
 `
 
 function parseFlags(argv: string[]): Flags {
@@ -58,7 +71,10 @@ function parseFlags(argv: string[]): Flags {
     elites: DEFAULTS.elites,
     cap: DEFAULTS.roundCap,
     bench: DEFAULTS.benchmarkGames,
-    out: 'artifacts/champion.json',
+    outDir: 'artifacts',
+    runId: null,
+    checkpointEvery: 10,
+    resume: null,
     quiet: false,
   }
 
@@ -103,8 +119,17 @@ function parseFlags(argv: string[]): Flags {
       case '--bench':
         flags.bench = Number(value)
         break
-      case '--out':
-        flags.out = value
+      case '--out-dir':
+        flags.outDir = value
+        break
+      case '--run-id':
+        flags.runId = value
+        break
+      case '--every':
+        flags.checkpointEvery = Number(value)
+        break
+      case '--resume':
+        flags.resume = value
         break
       default:
         throw new Error(`unknown flag ${flag}\n\n${USAGE}`)
@@ -113,6 +138,19 @@ function parseFlags(argv: string[]): Flags {
 
   return flags
 }
+
+/** A run's default name, which says what produced it and nothing that drifts. */
+function defaultRunId(options: ResolvedOptions): string {
+  return [
+    `pop${options.populationSize}`,
+    `gen${options.generations}`,
+    `games${options.gamesPerPairing}`,
+    `depth${options.maxDepth}`,
+    `seed${options.seed}`,
+  ].join('-')
+}
+
+// ── printing ──────────────────────────────────────────────
 
 function pad(value: string, width: number): string {
   return value.length >= width ? value : `${value}${' '.repeat(width - value.length)}`
@@ -150,86 +188,153 @@ const HEADER = [
   BASELINES.map((opponent) => opponent.id).join('  '),
 ].join(' ')
 
-function showOrder(order: RoundOrder): string {
-  return `→ ${orderCode(order)}`
+// ── writing the run down ──────────────────────────────────
+
+function write(path: string, body: string): void {
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, body)
 }
 
-function describeGenome(genome: Genome): string {
-  const parts = [`army posture tree`, describeTree(genome.army, (p) => `→ posture ${p}`, '  ')]
-  for (const type of UNIT_TYPES) {
-    parts.push(`\n${type} tree`, describeTree(genome.units[type], showOrder, '  '))
-  }
-  return parts.join('\n')
+/** Checkpoints are written compact: a pretty-printed tree is thousands of lines. */
+function writeCheckpoint(
+  paths: RunPaths,
+  runId: string,
+  state: RunState,
+  options: ResolvedOptions,
+): string {
+  const path = `${paths.checkpoints}/${checkpointName(state.generation)}`
+  write(path, `${JSON.stringify(toCheckpoint(runId, state, options))}\n`)
+  return path
 }
 
 function main(): void {
   const flags = parseFlags(process.argv.slice(2))
-  const write = (text: string) => process.stdout.write(`${text}\n`)
+  const say = (text: string) => process.stdout.write(`${text}\n`)
+
+  const overrides = {
+    populationSize: flags.pop,
+    generations: flags.gens,
+    gamesPerPairing: flags.games,
+    seed: flags.seed,
+    roundCap: flags.cap,
+    maxDepth: flags.depth,
+    mutationRate: flags.mutation,
+    elites: flags.elites,
+    benchmarkGames: flags.bench,
+  }
+
+  let from: RunState | undefined
+  let options: ResolvedOptions | undefined
+  let resumedId: string | undefined
+  if (flags.resume) {
+    const checkpoint = parseCheckpoint(JSON.parse(readFileSync(flags.resume, 'utf8')))
+    // the settings come from the checkpoint; only the generation count is the
+    // caller's to change, since everything else would invalidate the run so far
+    const resumed = fromCheckpoint(checkpoint, { generations: flags.gens })
+    from = resumed.state
+    options = resumed.options
+    // a resumed run is the same run carried further, so its checkpoints belong
+    // next to the ones already written rather than in a directory of their own
+    resumedId = checkpoint.runId
+    if (from.generation >= options.generations) {
+      throw new Error(
+        `checkpoint is already at generation ${from.generation}; ` +
+          `pass --gens above that to carry on`,
+      )
+    }
+    say(
+      `resuming ${checkpoint.runId} from generation ${from.generation} ` +
+        `(${flags.resume}) up to generation ${options.generations}`,
+    )
+  }
+
+  const settled = options ?? { ...DEFAULTS, ...overrides }
+  const runId = flags.runId ?? resumedId ?? defaultRunId(settled)
+  const paths = runPaths(flags.outDir, runId)
 
   if (!flags.quiet) {
-    write(
-      `evolving ${flags.pop} genomes over ${flags.gens} generations ` +
-        `(seed ${flags.seed}, ${flags.games} scenarios per pairing)`,
-    )
-    write(HEADER)
+    if (!from) {
+      say(
+        `evolving ${settled.populationSize} genomes over ${settled.generations} generations ` +
+          `(seed ${settled.seed}, ${settled.gamesPerPairing} scenarios per pairing)`,
+      )
+    }
+    say(HEADER)
   }
 
   const started = Date.now()
   const result = evolve(
+    options ?? overrides,
     {
-      populationSize: flags.pop,
-      generations: flags.gens,
-      gamesPerPairing: flags.games,
-      seed: flags.seed,
-      roundCap: flags.cap,
-      maxDepth: flags.depth,
-      mutationRate: flags.mutation,
-      elites: flags.elites,
-      benchmarkGames: flags.bench,
+      onGeneration: (report, state) => {
+        if (!flags.quiet) say(line(report))
+        const last = state.generation === settled.generations
+        const due =
+          flags.checkpointEvery > 0 && state.generation % flags.checkpointEvery === 0
+        if (last || due) writeCheckpoint(paths, runId, state, settled)
+      },
     },
-    (report) => {
-      if (!flags.quiet) write(line(report))
-    },
+    from,
+  )
+  const seconds = (Date.now() - started) / 1000
+
+  const champion = result.champion
+  const marks = BASELINES.map((opponent) =>
+    benchmark(champion, opponent, {
+      games: Math.max(20, flags.bench),
+      seed: settled.seed + 1000,
+      roundCap: settled.roundCap,
+    }),
   )
 
-  const seconds = (Date.now() - started) / 1000
-  const champion = result.champion
-  write('')
-  write(`champion ${champion.id} — ${genomeSize(champion)} nodes, ${num(seconds, 1)}s`)
-  for (const opponent of BASELINES) {
-    const scored = benchmark(champion, opponent, {
-      games: Math.max(20, flags.bench),
-      seed: flags.seed + 1000,
-      roundCap: flags.cap,
-    })
-    write(
-      `  vs ${pad(opponent.id, 18)} ${scored.wins}W ${scored.draws}D ${scored.losses}L ` +
-        `— win rate ${num(scored.winRate)}, differential ${num(scored.differential)}`,
-    )
-  }
-  write('')
-  write(describeGenome(champion))
+  const summary = marks.map(
+    (mark) =>
+      `  vs ${pad(mark.opponent, 18)} ${mark.wins}W ${mark.draws}D ${mark.losses}L ` +
+      `— win rate ${num(mark.winRate)}, differential ${num(mark.differential)}`,
+  )
+  say('')
+  say(`champion ${champion.id} — ${genomeSize(champion)} nodes, ${num(seconds, 1)}s`)
+  for (const row of summary) say(row)
+  say('')
+  say(describeGenome(champion))
 
-  const payload = {
-    seed: flags.seed,
-    options: {
-      ...result.options,
-      baselines: result.options.baselines.map((opponent) => opponent.id),
-    },
-    reports: result.reports,
-    champion,
-    standings: result.standings.map((standing) => ({
-      id: standing.genome.id,
-      score: standing.score,
-      wins: standing.wins,
-      draws: standing.draws,
-      losses: standing.losses,
-      differential: standing.differential,
-    })),
-  }
-  mkdirSync(dirname(flags.out), { recursive: true })
-  writeFileSync(flags.out, `${JSON.stringify(payload, null, 2)}\n`)
-  write(`\nwrote ${flags.out}`)
+  write(
+    paths.run,
+    `${JSON.stringify(
+      {
+        runId,
+        options: serializeOptions(result.options),
+        seconds,
+        champion: champion.id,
+        finalBenchmarks: marks,
+        reports: result.reports,
+        standings: result.standings.map((standing) => ({
+          id: standing.genome.id,
+          score: standing.score,
+          wins: standing.wins,
+          draws: standing.draws,
+          losses: standing.losses,
+          differential: standing.differential,
+        })),
+      },
+      null,
+      2,
+    )}\n`,
+  )
+  write(paths.curve, curveCsv(result.reports))
+  write(paths.champion, `${JSON.stringify(champion)}\n`)
+  write(
+    paths.championText,
+    [
+      `champion of ${runId}`,
+      '',
+      ...summary.map((row) => row.trim()),
+      '',
+      describeGenome(champion),
+      '',
+    ].join('\n'),
+  )
+  say(`\nwrote ${paths.root}/`)
 }
 
 main()

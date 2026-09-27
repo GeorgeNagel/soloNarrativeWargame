@@ -1,0 +1,69 @@
+champion of pop24-gen40-games2-depth6-seed1
+
+vs close-on-nearest   32W 5D 3L — win rate 0.863, differential 0.184
+vs hold-fast          6W 34D 0L — win rate 0.575, differential 0.087
+
+g40-8 — 37 nodes, bred in generation 40
+
+army posture tree
+  → posture 1
+
+infantry tree
+  foeWheelsAbs < 1.5
+    foeCanShoot < 0.5
+      → L60·ADV
+    else
+      foeCanShoot < 0.5
+        roundsToContact < 4.5
+          → L60·ADV×2·L60
+        else
+          heldFrontally < 0.5
+            → ADV·R60×3
+          else
+            → R60·ADV×4·L60×2
+      else
+        → ADV×3·R60
+  else
+    shootWheels < -0.5
+      shootTargets < 3.5
+        foeMelee < 0.5
+          → L60·ADV×3
+        else
+          foeCanShoot < 0.5
+            → L60·ADV×2·L60
+          else
+            → ADV×2·R60
+      else
+        adjacentEnemies < 1.5
+          foeWheelsAbs < 1.5
+            → R60×3·ADV×2·R60×3
+          else
+            → L60×2·ADV×4·R60×3
+        else
+          → R60×3·HLD·R60
+    else
+      adjacentEnemies < 1.5
+        → L60×2·ADV×2
+      else
+        → L60×3·ADV×4·L60×2
+
+archers tree
+  → R60×3·HLD·R60×3
+
+skirmishers tree
+  → R60×2·HLD·L60×2
+
+cavalry tree
+  hexesAhead < 1.5
+    foeWheels < -2.5
+      engaged < 0.5
+        → ADV×4·L60
+      else
+        → L60×3·HLD·L60×2
+    else
+      foeWheels < -2.5
+        → ADV×3·L60
+      else
+        → ADV×4·L60
+  else
+    → ADV×4·L60

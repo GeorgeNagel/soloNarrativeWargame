@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "test": "vitest run",
     "preview": "vite preview",
-    "evolve": "vite-node src/ai/cli.ts --"
+    "evolve": "vite-node src/ai/cli.ts --",
+    "ai:play": "vite-node src/ai/play-cli.ts --"
   },
   "dependencies": {
     "react": "^18.3.1",
