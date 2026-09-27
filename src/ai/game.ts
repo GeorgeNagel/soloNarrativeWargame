@@ -1,0 +1,141 @@
+/**
+ * A headless game between two genomes.
+ *
+ * Both commanders write their whole order book, the books are merged, and
+ * `resolveRound` runs exactly as it does under the console — same rules, same
+ * dice, only the dice come from a seeded stream so a game replays.
+ */
+import { isAlive, type Side, type UnitState } from '../prototypes/tactical/model'
+import { resolveRound, survivors } from '../prototypes/tactical/sim'
+import { strengthOf } from './features'
+import { rosterOf } from './roster'
+import type { Roster } from './roster'
+import type { Commander } from './commander'
+import { deploy } from './scenario'
+import type { Scenario } from './scenario'
+import { seededD6 } from './rng'
+import type { Rng } from './rng'
+
+/** Rounds a game runs before it is called off as a draw. */
+export const DEFAULT_ROUND_CAP = 30
+
+/**
+ * Consecutive rounds in which nothing moves, nothing shoots and nothing fights
+ * before the game is called off. Two armies that both decide to stand fast would
+ * otherwise burn the whole round cap doing nothing.
+ */
+const STALE_LIMIT = 3
+
+/** How much of the score the surviving-strength differential is worth. */
+export const DIFFERENTIAL_WEIGHT = 0.25
+
+export interface GameOutcome {
+  /** Rounds actually resolved. */
+  rounds: number
+  /** The side that broke the other, or null for a draw. */
+  winner: Side | null
+  /** Surviving strength each side kept, as a fraction of what it deployed. */
+  strength: Record<Side, number>
+  /** `strength.player - strength.enemy`, in [-1, 1]. */
+  differential: number
+  /** Set when the round cap or a stalemate stopped the game. */
+  timedOut: boolean
+  /** Units each side deployed. */
+  roster: Roster
+}
+
+export interface GameOptions {
+  roundCap?: number
+}
+
+function positionsOf(units: UnitState[]): string {
+  return units.map((unit) => `${unit.id}:${unit.pos.q},${unit.pos.r}`).join('|')
+}
+
+function livingCount(units: UnitState[], side: Side): number {
+  return units.filter((unit) => unit.side === side && isAlive(unit)).length
+}
+
+/**
+ * Play one game to a conclusion. `player` commands the player side and `enemy`
+ * the enemy side; `rng` supplies every die rolled, so the same scenario and the
+ * same seed always produce the same game.
+ */
+export function playGame(
+  player: Commander,
+  enemy: Commander,
+  scenario: Scenario,
+  rng: Rng,
+  options: GameOptions = {},
+): GameOutcome {
+  const cap = options.roundCap ?? DEFAULT_ROUND_CAP
+  const roll = seededD6(rng)
+  let board = deploy(scenario)
+  const roster = rosterOf(board)
+
+  let rounds = 0
+  let stale = 0
+  let timedOut = true
+
+  for (let round = 1; round <= cap; round += 1) {
+    if (livingCount(board, 'player') === 0 || livingCount(board, 'enemy') === 0) {
+      timedOut = false
+      break
+    }
+
+    const before = positionsOf(board)
+    const orders = {
+      ...player.orders(board, 'player', round, roster),
+      ...enemy.orders(board, 'enemy', round, roster),
+    }
+    const result = resolveRound(board, orders, roll)
+    board = survivors(result)
+    rounds = round
+
+    const idle =
+      result.shots.length === 0 &&
+      result.engagements.length === 0 &&
+      positionsOf(board) === before
+    stale = idle ? stale + 1 : 0
+    if (stale >= STALE_LIMIT) break
+
+    if (livingCount(board, 'player') === 0 || livingCount(board, 'enemy') === 0) {
+      timedOut = false
+      break
+    }
+  }
+
+  const strength = {
+    player: strengthOf(board, 'player', roster.player),
+    enemy: strengthOf(board, 'enemy', roster.enemy),
+  }
+  const playerAlive = livingCount(board, 'player') > 0
+  const enemyAlive = livingCount(board, 'enemy') > 0
+  const winner: Side | null =
+    playerAlive && !enemyAlive ? 'player' : enemyAlive && !playerAlive ? 'enemy' : null
+
+  return {
+    rounds,
+    winner,
+    strength,
+    differential: strength.player - strength.enemy,
+    timedOut,
+    roster,
+  }
+}
+
+/**
+ * One side's score for a game: a win, draw or loss, plus a slice of the
+ * surviving-strength differential.
+ *
+ * The differential is what gives selection a gradient in the first generations,
+ * when almost every game is a draw and pure win rate would rank at random. A
+ * game stopped by the round cap is a draw, so the differential is the only thing
+ * that separates two armies that never broke each other.
+ */
+export function scoreFor(outcome: GameOutcome, side: Side): number {
+  const result = outcome.winner === null ? 0.5 : outcome.winner === side ? 1 : 0
+  const differential =
+    side === 'player' ? outcome.differential : -outcome.differential
+  return result + DIFFERENTIAL_WEIGHT * differential
+}
