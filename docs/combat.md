@@ -49,6 +49,9 @@ board carries no terrain yet, so that modifier is not implemented.
   its alternating player turns. Orders here are committed for every unit at the
   start of the round and resolve together, so combat resolves together too.
 
+Shooting is resolved at the same tick boundary, just before the melee, and its
+hits are added before elimination is checked. See `docs/shooting.md`.
+
 ## Elimination
 
 - A unit is **eliminated once it has acquired 15 hits**.

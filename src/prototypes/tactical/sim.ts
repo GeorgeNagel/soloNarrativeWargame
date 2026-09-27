@@ -5,13 +5,15 @@
  * Implements `docs/combat.md`, `docs/movement.md` and `docs/turn-structure.md`,
  * which adapt the Ancient Wargames Rules in Neil Thomas, *One-Hour Wargames*.
  */
-import { hexIsAdjacent, hexNeighbor } from '../../engine'
+import { hexDistance, hexIsAdjacent, hexNeighbor } from '../../engine'
 import type { Hex } from '../../engine'
 import {
   HITS_TO_ELIMINATE,
   MAX_ADVANCES_PER_TICK,
   TICKS_PER_ROUND,
   boardTiles,
+  canShoot,
+  canShootAt,
   hexKey,
   isAlive,
   isRearAttack,
@@ -103,14 +105,106 @@ export function engagementsAmong(units: UnitState[], roll: Roll): Engagement[] {
   return engagements
 }
 
-/** Total hits each unit acquires from a tick's engagements. */
-function tallyHits(engagements: Engagement[]): Map<string, number> {
+/**
+ * Total hits each unit acquires this tick, from shooting and melee alike.
+ *
+ * Both land together and elimination is checked afterwards, which is the
+ * book's own order: shooting, then hand-to-hand, then eliminating units.
+ */
+function tallyHits(shots: Shot[], engagements: Engagement[]): Map<string, number> {
   const taken = new Map<string, number>()
+  const add = (id: string, hits: number) => taken.set(id, (taken.get(id) ?? 0) + hits)
+  for (const shot of shots) add(shot.targetId, shot.hits)
   for (const fight of engagements) {
-    taken.set(fight.bId, (taken.get(fight.bId) ?? 0) + fight.a.hits)
-    taken.set(fight.aId, (taken.get(fight.aId) ?? 0) + fight.b.hits)
+    add(fight.bId, fight.a.hits)
+    add(fight.aId, fight.b.hits)
   }
   return taken
+}
+
+// ── shooting ──────────────────────────────────────────────
+
+/** One unit's shot at one target. */
+export interface Shot {
+  shooterId: string
+  targetId: string
+  /** The raw d6 before the shooter's type modifier. */
+  roll: number
+  /** Hits mandated by the roll and the type modifier, before target modifiers. */
+  mandated: number
+  /** Hits the target actually acquires. */
+  hits: number
+  /** Whether the target's armour halved the mandated hits. */
+  armoured: boolean
+}
+
+/**
+ * Hits a shot inflicts, per `docs/shooting.md`: the modified d6, halved by the
+ * target's armour with the fraction rounded in favour of the unit shooting.
+ *
+ * There is no rear bonus for shooting — the book gives that to melee only.
+ */
+export function assessShot(
+  shooter: UnitState,
+  target: UnitState,
+  roll: number,
+): Omit<Shot, 'shooterId' | 'targetId'> {
+  const modifier = profileOf(shooter).shootModifier ?? 0
+  const mandated = Math.max(0, roll + modifier)
+  const armoured = profileOf(target).armoured
+  return {
+    roll,
+    mandated,
+    hits: armoured ? Math.ceil(mandated / 2) : mandated,
+    armoured,
+  }
+}
+
+/**
+ * The single target this unit shoots at: the nearest enemy in range and inside
+ * the field of fire, ties broken by roster order so a round replays the same
+ * way. The book lets the player choose; here the choice is made by where you
+ * point the unit, since wheeling is free and shooting needs a tick without an
+ * advance.
+ */
+export function shootingTarget(shooter: UnitState, units: UnitState[]): UnitState | null {
+  let best: UnitState | null = null
+  let bestRange = Infinity
+  for (const other of units) {
+    if (other.side === shooter.side || !isAlive(other)) continue
+    if (!canShootAt(shooter, other.pos)) continue
+    const range = hexDistance(shooter.pos, other.pos)
+    if (range < bestRange) {
+      best = other
+      bestRange = range
+    }
+  }
+  return best
+}
+
+/**
+ * Every shot taken at this tick boundary. A unit that advanced this tick may
+ * not shoot — the book's *Moving and Shooting* rule. Wheeling is not moving,
+ * so a unit may turn onto its target and still loose.
+ */
+export function shotsAmong(
+  units: UnitState[],
+  advancedIds: Set<string>,
+  roll: Roll,
+): Shot[] {
+  const shots: Shot[] = []
+  for (const shooter of units) {
+    if (!isAlive(shooter) || !canShoot(shooter)) continue
+    if (advancedIds.has(shooter.id)) continue
+    const target = shootingTarget(shooter, units)
+    if (!target) continue
+    shots.push({
+      shooterId: shooter.id,
+      targetId: target.id,
+      ...assessShot(shooter, target, roll()),
+    })
+  }
+  return shots
 }
 
 // ── movement ──────────────────────────────────────────────
@@ -162,9 +256,16 @@ function moveTick(
   start: UnitState[],
   orders: Record<string, OrderSlots>,
   tick: number,
-): { units: UnitState[]; blockedIds: string[] } {
+): { units: UnitState[]; blockedIds: string[]; advancedIds: Set<string> } {
   let units = start.map((unit) => applyWheel(unit, orders[unit.id]?.[tick] ?? null))
   const blocked = new Set<string>()
+  // Ordering an advance counts as moving even if the hex turns out to be held,
+  // so a refused advance still costs the unit its shot.
+  const advanced = new Set(
+    units
+      .filter((unit) => advancesAt(unit, orders[unit.id] ?? [], tick) > 0)
+      .map((unit) => unit.id),
+  )
 
   for (let step = 0; step < MAX_ADVANCES_PER_TICK; step += 1) {
     const next = [...units]
@@ -179,7 +280,7 @@ function moveTick(
     units = next
   }
 
-  return { units, blockedIds: [...blocked] }
+  return { units, blockedIds: [...blocked], advancedIds: advanced }
 }
 
 // ── the round ─────────────────────────────────────────────
@@ -190,6 +291,8 @@ export interface TickFrame {
   moved: UnitState[]
   /** Post-combat: what the board looks like at the tick boundary. */
   units: UnitState[]
+  /** Shots loosed at this tick boundary, resolved before the melee. */
+  shots: Shot[]
   engagements: Engagement[]
   /** Units whose advance was refused this tick (board edge or an occupied hex). */
   blockedIds: string[]
@@ -207,9 +310,10 @@ export function resolveRound(
   let current = cloned(start)
 
   for (let tick = 0; tick < TICKS_PER_ROUND; tick += 1) {
-    const { units: moved, blockedIds } = moveTick(current, orders, tick)
+    const { units: moved, blockedIds, advancedIds } = moveTick(current, orders, tick)
+    const shots = shotsAmong(moved, advancedIds, roll)
     const engagements = engagementsAmong(moved, roll)
-    const taken = tallyHits(engagements)
+    const taken = tallyHits(shots, engagements)
 
     const units = moved.map((unit) => ({
       ...unit,
@@ -220,6 +324,7 @@ export function resolveRound(
       tick,
       moved,
       units,
+      shots,
       engagements,
       blockedIds,
       eliminatedIds: units.filter((unit) => !isAlive(unit)).map((unit) => unit.id),

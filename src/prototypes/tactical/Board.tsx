@@ -1,10 +1,18 @@
 import { hexCorners, hexHeight, hexNeighbor, hexToPixel, hexWidth } from '../../engine'
 import type { Hex, Point } from '../../engine'
 import { C } from './theme'
-import { HITS_TO_ELIMINATE, decidedTicks, hexKey, profileOf, queueState } from './model'
+import {
+  HITS_TO_ELIMINATE,
+  canShoot,
+  canShootAt,
+  decidedTicks,
+  hexKey,
+  profileOf,
+  queueState,
+} from './model'
 import type { OrderSlots, UnitState } from './model'
 import { isOnBoard } from './sim'
-import type { Engagement, PreviewMap, PreviewStep } from './sim'
+import type { Engagement, PreviewMap, PreviewStep, Shot } from './sim'
 
 const S = 30
 const MARGIN = 7
@@ -50,6 +58,15 @@ export interface BoardProps {
   previews: PreviewMap | null
   slots: Record<string, OrderSlots>
   engagements: Engagement[]
+  /**
+   * The shooter whose field of fire to draw, already resolved to the position
+   * and facing its plan gives it at the focused tick. Null when there is
+   * nothing to aim.
+   */
+  arcUnit: UnitState | null
+  shots: Shot[]
+  /** Shots are drawn in their own beat, before the melee. */
+  showShots: boolean
   blockedIds: string[]
   showClash: boolean
   beatKey: number
@@ -291,6 +308,9 @@ function Board({
   previews,
   slots,
   engagements,
+  arcUnit,
+  shots,
+  showShots,
   blockedIds,
   showClash,
   beatKey,
@@ -313,6 +333,14 @@ function Board({
   }
 
   const forward = selected && !playing ? hexNeighbor(selected.pos, selected.facing) : null
+
+  // While planning, show a shooter what it can actually reach: wheels are free,
+  // so this cone is the thing the player is really steering. It follows the
+  // planned facing, not the committed one, or it would never move.
+  const arc =
+    arcUnit && !playing && canShoot(arcUnit)
+      ? tiles.filter((tile) => canShootAt(arcUnit, tile))
+      : []
 
   // One beat per engagement, numbered to match the console's tick log.
   const beatOf = new Map<string, number>()
@@ -414,6 +442,19 @@ function Board({
           </g>
         </g>
       )}
+      {arc.map((tile) => (
+        <polygon
+          key={`arc-${hexKey(tile)}`}
+          points={poly(px(tile), S * 0.93)}
+          fill={accentOf(arcUnit!)}
+          opacity={0.09}
+          stroke={accentOf(arcUnit!)}
+          strokeWidth={0.6}
+          strokeDasharray="2 5"
+          pointerEvents="none"
+        />
+      ))}
+
       {forward && isOnBoard(forward) && (
         <polygon
           points={poly(px(forward), S * 0.92)}
@@ -491,6 +532,65 @@ function Board({
           </g>
         )
       })}
+
+      {/* shooting resolves on its own beat, ahead of the melee */}
+      {showShots && shots.length > 0 && (
+        <g key={`shots-${beatKey}`} pointerEvents="none">
+          {shots.map((shot, i) => {
+            const shooter = units.find((u) => u.id === shot.shooterId)
+            const target = units.find((u) => u.id === shot.targetId)
+            if (!shooter || !target) return null
+            const from = px(shooter.pos)
+            const to = px(target.pos)
+            const accent = accentOf(shooter)
+            const delay = { animationDelay: `${i * 110}ms` }
+            // stop the flight short of the token so the arrow stays readable
+            const span = Math.hypot(to.x - from.x, to.y - from.y) || 1
+            const trim = (S * 0.78) / span
+            const tip = {
+              x: to.x - (to.x - from.x) * trim,
+              y: to.y - (to.y - from.y) * trim,
+            }
+            return (
+              <g key={`shot-${shot.shooterId}-${shot.targetId}-${i}`}>
+                <g className="tc-shot" style={delay}>
+                  <line
+                    x1={from.x}
+                    y1={from.y}
+                    x2={tip.x}
+                    y2={tip.y}
+                    stroke={accent}
+                    strokeWidth={1.6}
+                    strokeDasharray="5 4"
+                    strokeLinecap="round"
+                  />
+                  <circle cx={tip.x} cy={tip.y} r={S * 0.14} fill={accent} />
+                </g>
+                <g
+                  transform={`translate(${to.x}, ${to.y - S * 0.95})`}
+                >
+                  <g className="tc-float" style={delay}>
+                    <text
+                      textAnchor="middle"
+                      fontSize={S * 0.38}
+                      fontWeight={700}
+                      fill={accentOf(target)}
+                      stroke={C.paper}
+                      strokeWidth={0.8}
+                      paintOrder="stroke"
+                    >
+                      {`+${shot.hits}`}
+                    </text>
+                    <text textAnchor="middle" y={S * 0.32} fontSize={S * 0.2} fill={accent}>
+                      SHOT
+                    </text>
+                  </g>
+                </g>
+              </g>
+            )
+          })}
+        </g>
+      )}
 
       {/* tick-boundary contact scan + clash beats */}
       {showClash && (

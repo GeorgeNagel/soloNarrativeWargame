@@ -5,7 +5,10 @@ import type { HexDirection } from '../../engine'
 import {
   HITS_TO_ELIMINATE,
   TICKS_PER_ROUND,
+  canShoot,
+  canShootAt,
   facingAngle,
+  inFieldOfFire,
   isRearAttack,
   orderCode,
   tickOrder,
@@ -13,9 +16,12 @@ import {
 import type { OrderSlots, UnitState, UnitType } from './model'
 import {
   assessBlow,
+  assessShot,
   engagementsAmong,
   previewAll,
   resolveRound,
+  shootingTarget,
+  shotsAmong,
   survivors,
 } from './sim'
 
@@ -281,5 +287,169 @@ describe('orderCode', () => {
     expect(orderCode(tickOrder(null, 1))).toBe('ADV')
     expect(orderCode(tickOrder('right', 1))).toBe('R60·ADV')
     expect(orderCode(tickOrder(null, 2))).toBe('ADV×2')
+  })
+})
+
+describe('who may shoot', () => {
+  it('lets archers and skirmishers shoot, and nobody else', () => {
+    expect(canShoot(unit('a', 'archers', 'player', 0, 3))).toBe(true)
+    expect(canShoot(unit('s', 'skirmishers', 'player', 0, 3))).toBe(true)
+    expect(canShoot(unit('i', 'infantry', 'player', 0, 3))).toBe(false)
+    expect(canShoot(unit('c', 'cavalry', 'player', 0, 3))).toBe(false)
+  })
+})
+
+describe('field of fire', () => {
+  const bow = unit('b', 'archers', 'player', 0, 3, 'E')
+
+  it('covers the faced direction', () => {
+    expect(inFieldOfFire(bow, hex(1, 3))).toBe(true)
+    expect(inFieldOfFire(bow, hex(3, 3))).toBe(true)
+  })
+
+  it('covers a target 45 degrees off the facing but not 60', () => {
+    // (2,2) sits 30 degrees off east; the NE neighbour sits a full 60 off
+    expect(inFieldOfFire(bow, hex(2, 2))).toBe(true)
+    expect(inFieldOfFire(bow, hex(1, 2))).toBe(false)
+  })
+
+  it('excludes everything behind the shooter', () => {
+    expect(inFieldOfFire(bow, hex(-1, 3))).toBe(false)
+    expect(inFieldOfFire(bow, hex(-2, 3))).toBe(false)
+  })
+
+  it('excludes the shooter own hex', () => {
+    expect(inFieldOfFire(bow, hex(0, 3))).toBe(false)
+  })
+
+  it('stops at 4 hexes of range', () => {
+    expect(canShootAt(bow, hex(4, 3))).toBe(true)
+    expect(canShootAt(bow, hex(5, 3))).toBe(false)
+  })
+
+  it('never lets a type that cannot shoot take a shot', () => {
+    const horse = unit('h', 'cavalry', 'player', 0, 3, 'E')
+    expect(canShootAt(horse, hex(1, 3))).toBe(false)
+  })
+})
+
+describe('assessShot', () => {
+  const soft = unit('t', 'cavalry', 'enemy', 3, 3, 'W')
+
+  it('uses an unmodified die for archers', () => {
+    expect(assessShot(unit('a', 'archers', 'player', 0, 3, 'E'), soft, 4).hits).toBe(4)
+  })
+
+  it('subtracts 2 for skirmishers, never below zero', () => {
+    const skm = unit('s', 'skirmishers', 'player', 0, 3, 'E')
+    expect(assessShot(skm, soft, 5).hits).toBe(3)
+    expect(assessShot(skm, soft, 1).hits).toBe(0)
+  })
+
+  it('halves against armoured infantry, rounding to the shooter', () => {
+    const armoured = unit('t', 'infantry', 'enemy', 3, 3, 'W')
+    const shot = assessShot(unit('a', 'archers', 'player', 0, 3, 'E'), armoured, 5)
+    expect(shot.armoured).toBe(true)
+    expect(shot.hits).toBe(3)
+  })
+
+  it('gives no rear bonus — that belongs to melee alone', () => {
+    const facingAway = unit('t', 'cavalry', 'enemy', 3, 3, 'E')
+    expect(assessShot(unit('a', 'archers', 'player', 0, 3, 'E'), facingAway, 4).hits).toBe(4)
+  })
+})
+
+describe('shootingTarget', () => {
+  const bow = unit('b', 'archers', 'player', 0, 3, 'E')
+
+  it('picks the nearest enemy in the cone', () => {
+    const near = unit('n', 'cavalry', 'enemy', 2, 3)
+    const far = unit('f', 'cavalry', 'enemy', 4, 3)
+    expect(shootingTarget(bow, [bow, near, far])?.id).toBe('n')
+  })
+
+  it('ignores enemies out of the cone even when they are closer', () => {
+    const behind = unit('x', 'cavalry', 'enemy', -1, 3)
+    const ahead = unit('y', 'cavalry', 'enemy', 3, 3)
+    expect(shootingTarget(bow, [bow, behind, ahead])?.id).toBe('y')
+  })
+
+  it('never targets a friend, or an eliminated enemy', () => {
+    const friend = unit('p', 'cavalry', 'player', 2, 3)
+    const dead = { ...unit('d', 'cavalry', 'enemy', 3, 3), hits: HITS_TO_ELIMINATE }
+    expect(shootingTarget(bow, [bow, friend, dead])).toBeNull()
+  })
+
+  it('finds nothing when the field is empty ahead', () => {
+    expect(shootingTarget(bow, [bow])).toBeNull()
+  })
+})
+
+describe('shotsAmong', () => {
+  const bow = unit('b', 'archers', 'player', 0, 3, 'E')
+  const mark = unit('m', 'cavalry', 'enemy', 2, 3, 'W')
+
+  it('looses a shot from a unit that stood still', () => {
+    const shots = shotsAmong([bow, mark], new Set(), scripted(4))
+    expect(shots).toHaveLength(1)
+    expect(shots[0]).toMatchObject({ shooterId: 'b', targetId: 'm', hits: 4 })
+  })
+
+  it('denies the shot to a unit that advanced this tick', () => {
+    expect(shotsAmong([bow, mark], new Set(['b']), scripted(4))).toHaveLength(0)
+  })
+
+  it('does not let infantry or cavalry shoot at all', () => {
+    const foot = unit('f', 'infantry', 'player', 0, 3, 'E')
+    expect(shotsAmong([foot, mark], new Set(), scripted(4))).toHaveLength(0)
+  })
+})
+
+describe('shooting within a round', () => {
+  const hold = tickOrder(null, 0)
+  const standFast = queue(hold, hold, hold)
+
+  it('wears a target down over the ticks of a round', () => {
+    const bow = unit('b', 'archers', 'player', 0, 3, 'E')
+    const mark = unit('m', 'cavalry', 'enemy', 3, 3, 'W')
+    const frames = resolveRound([bow, mark], { b: standFast, m: standFast }, scripted(4))
+    expect(frames[0].shots).toHaveLength(1)
+    expect(frames[2].units.find((u) => u.id === 'm')?.hits).toBe(12)
+  })
+
+  it('lets a unit wheel onto a target and still shoot that tick', () => {
+    // facing E, the target sits NE — out of the cone until the free wheel
+    const bow = unit('b', 'archers', 'player', 0, 3, 'E')
+    const mark = unit('m', 'cavalry', 'enemy', 2, 1, 'SW')
+    const frames = resolveRound(
+      [bow, mark],
+      { b: queue(tickOrder('left', 0), hold, hold), m: standFast },
+      scripted(4),
+    )
+    expect(frames[0].shots).toHaveLength(1)
+    expect(frames[0].shots[0].targetId).toBe('m')
+  })
+
+  it('costs the shot when the tick is spent advancing', () => {
+    const bow = unit('b', 'archers', 'player', 0, 3, 'E')
+    const mark = unit('m', 'cavalry', 'enemy', 4, 3, 'W')
+    const frames = resolveRound(
+      [bow, mark],
+      { b: queue(tickOrder(null, 1), hold, hold), m: standFast },
+      scripted(4),
+    )
+    expect(frames[0].shots).toHaveLength(0)
+    expect(frames[1].shots).toHaveLength(1)
+  })
+
+  it('adds shooting hits and melee hits before checking elimination', () => {
+    // archers adjacent to their mark both shoot it and fight it in one tick
+    const bow = unit('b', 'archers', 'player', 0, 3, 'E')
+    const mark = unit('m', 'cavalry', 'enemy', 1, 3, 'W')
+    const frames = resolveRound([bow, mark], { b: standFast, m: standFast }, scripted(4))
+    expect(frames[0].shots).toHaveLength(1)
+    expect(frames[0].engagements).toHaveLength(1)
+    // 4 from the shot plus 4 from the melee
+    expect(frames[0].units.find((u) => u.id === 'm')?.hits).toBe(8)
   })
 })

@@ -12,8 +12,8 @@
 | Type | Melee die | Movement | Armour | Shoots |
 | --- | --- | --- | --- | --- |
 | Infantry | d6 **+2** | 2 hexes | yes | no |
-| Archers | d6 | 2 hexes | no | yes (not yet implemented) |
-| Skirmishers | d6 **−2** | 3 hexes | no | yes (not yet implemented) |
+| Archers | d6 | 2 hexes | no | yes, d6, 4 hexes |
+| Skirmishers | d6 **−2** | 3 hexes | no | yes, d6 **−2**, 4 hexes |
 | Cavalry | d6 | 4 hexes | no | no |
 
 - **Melee die**: the modifier applied to the d6 when this unit inflicts hits in
@@ -22,5 +22,5 @@
   and Archers 6", Skirmishers 9", Cavalry 12" — converted here at **3" per hex**.
 - **Armour**: an armoured unit halves the hits it *acquires*. It is a property of
   the target, not the attacker.
-- **Shooting**: the book lets Archers and Skirmishers shoot at 12". Shooting is
-  not implemented yet, so both currently fight in melee only.
+- **Shooting**: Archers and Skirmishers shoot at 4 hexes — the book's 12" at
+  3" per hex. See `docs/shooting.md`.

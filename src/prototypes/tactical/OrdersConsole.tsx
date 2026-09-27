@@ -5,6 +5,7 @@ import {
   HITS_TO_ELIMINATE,
   TICKS_PER_ROUND,
   WHEEL_GLYPH,
+  canShoot,
   decidedTicks,
   orderCode,
   profileOf,
@@ -247,8 +248,23 @@ function UnitCard({
           <span>MELEE</span>
         </div>
         <div className="tc-stat">
-          <b>{unit.facing}</b>
-          <span>FACE</span>
+          {canShoot(unit) ? (
+            <>
+              <b>
+                {profile.shootModifier === 0
+                  ? 'd6'
+                  : `d6${profile.shootModifier! > 0 ? '+' : '−'}${Math.abs(
+                      profile.shootModifier!,
+                    )}`}
+              </b>
+              <span>{`SHOOT ${profile.range}`}</span>
+            </>
+          ) : (
+            <>
+              <b>{unit.facing}</b>
+              <span>FACE</span>
+            </>
+          )}
         </div>
         <div className="tc-stat">
           <b>
@@ -482,6 +498,8 @@ function OrdersConsole({
             ['ADV', 'INTO THE FACED HEX · 1 HEX OF THE ALLOWANCE'],
             ['L60 / R60', 'WHEEL ONE EDGE · FREE'],
             ['HLD', 'STAND FAST · COSTS NOTHING'],
+            ['SHOOT', 'ARC / SKM ONLY · 4 HEXES · 45° OF THE FACED EDGE'],
+            ['', 'NEEDS A TICK WITHOUT AN ADVANCE · WHEELING IS FREE'],
             ['CONTACT', 'ADJACENT AT A TICK BOUNDARY · ONE FIGHT PER FACE'],
             ['MELEE', 'BOTH SIDES ROLL d6 ± TYPE · HITS LAND TOGETHER'],
             ['ARMOUR', 'INFANTRY TAKE HALF · ROUNDED TO THE ATTACKER'],
