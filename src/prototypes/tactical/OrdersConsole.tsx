@@ -2,12 +2,26 @@ import { useEffect, useRef } from 'react'
 import type { CSSProperties } from 'react'
 import { C } from './theme'
 import {
-  ORDER_META,
+  HITS_TO_ELIMINATE,
   TICKS_PER_ROUND,
-  assignedPoints,
+  WHEEL_GLYPH,
+  decidedTicks,
+  orderCode,
+  profileOf,
   queueState,
+  spentAdvances,
 } from './model'
-import type { OrderKind, OrderSlots, UnitState } from './model'
+import type { OrderSlots, UnitState } from './model'
+
+/** What the order pad can do to the focused tick. */
+export type PadAction = 'left' | 'right' | 'advance' | 'hold'
+
+const PAD_META: Record<PadAction, { glyph: string; code: string; label: string }> = {
+  left: { glyph: WHEEL_GLYPH.left, code: 'L60', label: 'WHEEL LEFT — FREE' },
+  advance: { glyph: '▲', code: 'ADV', label: 'ADVANCE ONE HEX' },
+  right: { glyph: WHEEL_GLYPH.right, code: 'R60', label: 'WHEEL RIGHT — FREE' },
+  hold: { glyph: '■', code: 'HLD', label: 'STAND FAST' },
+}
 
 export interface SlotFocus {
   unitId: string
@@ -35,7 +49,7 @@ export interface ConsoleProps {
   onSelect: (id: string) => void
   onFocus: (focus: SlotFocus) => void
   onCycle: (delta: number) => void
-  onAdd: (kind: OrderKind) => void
+  onOrder: (action: PadAction) => void
   onClearSlot: (unitId: string, tick: number) => void
   onClearUnit: (unitId: string) => void
 }
@@ -43,7 +57,7 @@ export interface ConsoleProps {
 const TICK_LABELS = ['T1', 'T2', 'T3']
 
 /** The pad reads like the board: wheels either side of the advance, hold below. */
-const PAD_ROW: OrderKind[] = ['left', 'move', 'right']
+const PAD_ROW: PadAction[] = ['left', 'advance', 'right']
 
 function accentOf(unit: UnitState): string {
   return unit.side === 'player' ? C.plr : C.enm
@@ -77,9 +91,9 @@ function PlanGrid({
     .filter((unit) => unit.side === 'player')
     .map((unit) => {
       const queue = slots[unit.id] ?? []
-      const spent = assignedPoints(queue)
-      const total = unit.stats.movement
-      const state = queueState(queue, total)
+      const spent = spentAdvances(queue)
+      const total = profileOf(unit).movement
+      const state = queueState(queue)
       const accent = accentOf(unit)
       return (
         <div
@@ -118,10 +132,10 @@ function PlanGrid({
                 disabled={playing}
                 onClick={() => onFocus({ unitId: unit.id, tick })}
                 aria-label={`${unit.tag} tick ${tick + 1}${
-                  order ? ` ${ORDER_META[order].code}` : ' empty'
+                  order ? ` ${orderCode(order)}` : ' undecided'
                 }`}
               >
-                {order ? ORDER_META[order].code : '···'}
+                {orderCode(order)}
               </button>
             )
           })}
@@ -141,7 +155,7 @@ function PlanGrid({
             {t}
           </span>
         ))}
-        <span className="tc-mcount">PTS</span>
+        <span className="tc-mcount">HEX</span>
       </div>
       {rows}
     </div>
@@ -157,7 +171,7 @@ function UnitCard({
   nextUnorderedId,
   onFocus,
   onCycle,
-  onAdd,
+  onOrder,
   onClearSlot,
   onClearUnit,
   onSelect,
@@ -170,16 +184,18 @@ function UnitCard({
   nextUnorderedId: string | null
   onFocus: (focus: SlotFocus) => void
   onCycle: (delta: number) => void
-  onAdd: (kind: OrderKind) => void
+  onOrder: (action: PadAction) => void
   onClearSlot: (unitId: string, tick: number) => void
   onClearUnit: (unitId: string) => void
   onSelect: (id: string) => void
 }) {
   const accent = accentOf(unit)
   const ai = unit.side === 'enemy'
-  const spent = assignedPoints(queue)
-  const total = unit.stats.movement
-  const armed = spent >= total
+  const profile = profileOf(unit)
+  const spent = spentAdvances(queue)
+  const total = profile.movement
+  const decided = decidedTicks(queue)
+  const armed = decided >= TICKS_PER_ROUND
   const style = { '--accent': accent } as CSSProperties
   const jumpId = nextUnorderedId && nextUnorderedId !== unit.id ? nextUnorderedId : null
 
@@ -198,7 +214,7 @@ function UnitCard({
         <span className="tc-tag">{unit.tag}</span>
         <span className="tc-name">{unit.name}</span>
         <span className={`tc-chip ${ai ? 'auto' : armed ? 'ok' : 'wait'}`}>
-          {ai ? 'AI AUTO' : armed ? 'ARMED' : `${total - spent} FREE`}
+          {ai ? 'AI AUTO' : armed ? 'ARMED' : `${TICKS_PER_ROUND - decided} TICKS OPEN`}
         </span>
         <button
           type="button"
@@ -212,17 +228,23 @@ function UnitCard({
       </div>
 
       <div className="tc-stats">
-        <div className={`tc-stat${unit.models < unit.startModels ? ' hurt' : ''}`}>
-          <b>{unit.models}</b>
-          <span>MDL</span>
+        <div className={`tc-stat${unit.hits > 0 ? ' hurt' : ''}`}>
+          <b>
+            {unit.hits}/{HITS_TO_ELIMINATE}
+          </b>
+          <span>HITS</span>
         </div>
         <div className="tc-stat">
-          <b>{unit.stats.attack}</b>
-          <span>ATK</span>
+          <b>{profile.code}</b>
+          <span>{profile.armoured ? 'ARMOURED' : 'TYPE'}</span>
         </div>
         <div className="tc-stat">
-          <b>{unit.stats.defense}</b>
-          <span>DEF</span>
+          <b>
+            {profile.meleeModifier === 0
+              ? 'd6'
+              : `d6${profile.meleeModifier > 0 ? '+' : '−'}${Math.abs(profile.meleeModifier)}`}
+          </b>
+          <span>MELEE</span>
         </div>
         <div className="tc-stat">
           <b>{unit.facing}</b>
@@ -232,7 +254,7 @@ function UnitCard({
           <b>
             {spent}/{total}
           </b>
-          <span>MOV</span>
+          <span>HEXES</span>
         </div>
       </div>
 
@@ -264,8 +286,10 @@ function UnitCard({
               <span className={`tc-slot-v${order ? '' : ' empty'}`}>
                 {order ? (
                   <>
-                    <span style={{ color: accent }}>{ORDER_META[order].glyph}</span>
-                    {ORDER_META[order].code}
+                    {order.wheel && (
+                      <span style={{ color: accent }}>{WHEEL_GLYPH[order.wheel]}</span>
+                    )}
+                    {orderCode(order)}
                   </>
                 ) : (
                   '— — —'
@@ -292,25 +316,30 @@ function UnitCard({
       {!ai && (
         <>
           <div className="tc-pad">
-            {[...PAD_ROW, 'hold' as OrderKind].map((kind) => (
-              <button
-                key={kind}
-                type="button"
-                className={`tc-btn${kind === 'hold' ? ' hold' : ''}`}
-                disabled={playing || !focus || focus.unitId !== unit.id}
-                onClick={() => onAdd(kind)}
-                aria-label={ORDER_META[kind].label}
-              >
-                <span style={{ color: accent }}>{ORDER_META[kind].glyph}</span>
-                <small>{ORDER_META[kind].code}</small>
-              </button>
-            ))}
+            {[...PAD_ROW, 'hold' as PadAction].map((action) => {
+              const meta = PAD_META[action]
+              // advances are the only thing that costs; wheels are free
+              const exhausted = action === 'advance' && spent >= total
+              return (
+                <button
+                  key={action}
+                  type="button"
+                  className={`tc-btn${action === 'hold' ? ' hold' : ''}`}
+                  disabled={playing || !focus || focus.unitId !== unit.id || exhausted}
+                  onClick={() => onOrder(action)}
+                  aria-label={meta.label}
+                >
+                  <span style={{ color: accent }}>{meta.glyph}</span>
+                  <small>{meta.code}</small>
+                </button>
+              )
+            })}
           </div>
           <div className="tc-cardfoot">
             <button
               type="button"
               className="tc-mini"
-              disabled={playing || spent === 0}
+              disabled={playing || decided === 0}
               onClick={() => onClearUnit(unit.id)}
             >
               WIPE
@@ -360,7 +389,7 @@ function OrdersConsole({
   onSelect,
   onFocus,
   onCycle,
-  onAdd,
+  onOrder,
   onClearSlot,
   onClearUnit,
 }: ConsoleProps) {
@@ -433,7 +462,7 @@ function OrdersConsole({
               nextUnorderedId={nextUnorderedId}
               onFocus={onFocus}
               onCycle={onCycle}
-              onAdd={onAdd}
+              onOrder={onOrder}
               onClearSlot={onClearSlot}
               onClearUnit={onClearUnit}
               onSelect={onSelect}
@@ -450,12 +479,15 @@ function OrdersConsole({
         </div>
         <div className="tc-legend tc-wide">
           {[
-            ['ADV', 'INTO THE FACED HEX · 1 PT'],
-            ['L60 / R60', 'WHEEL ONE EDGE · 1 PT'],
-            ['HLD', 'STAND FAST · 1 PT'],
-            ['CONTACT', 'ADJACENT AT A TICK BOUNDARY'],
-            ['FLANK', 'REAR 3 EDGES · DEF ÷2'],
-            ['BLOCKED', 'HEX HELD · ADV REFUSED, PT SPENT'],
+            ['ADV', 'INTO THE FACED HEX · 1 HEX OF THE ALLOWANCE'],
+            ['L60 / R60', 'WHEEL ONE EDGE · FREE'],
+            ['HLD', 'STAND FAST · COSTS NOTHING'],
+            ['CONTACT', 'ADJACENT AT A TICK BOUNDARY · ONE FIGHT PER FACE'],
+            ['MELEE', 'BOTH SIDES ROLL d6 ± TYPE · HITS LAND TOGETHER'],
+            ['ARMOUR', 'INFANTRY TAKE HALF · ROUNDED TO THE ATTACKER'],
+            ['REAR', 'REAR 3 EDGES · HITS DOUBLED'],
+            ['GONE', `${HITS_TO_ELIMINATE} HITS ELIMINATES A UNIT`],
+            ['BLOCKED', 'HEX HELD · ADV REFUSED, HEX SPENT'],
           ].map(([k, v]) => (
             <div className="tc-legendrow" key={k}>
               <i>{k}</i>
