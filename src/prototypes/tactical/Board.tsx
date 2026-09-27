@@ -64,6 +64,8 @@ export interface BoardProps {
    * nothing to aim.
    */
   arcUnit: UnitState | null
+  /** Units melee refused this tick — drawn like a blocked advance, worded apart. */
+  lockedIds: string[]
   shots: Shot[]
   /** Shots are drawn in their own beat, before the melee. */
   showShots: boolean
@@ -228,6 +230,7 @@ function Trace({
   const end = steps[steps.length - 1] ?? null
   const moved = end ? end.pos.q !== unit.pos.q || end.pos.r !== unit.pos.r : false
   const blocked = steps.find((step) => step.blocked) ?? null
+  const held = steps.find((step) => step.locked) ?? null
 
   return (
     <g>
@@ -261,6 +264,19 @@ function Trace({
             d={`M ${-S * 0.13} ${-S * 0.13} L ${S * 0.13} ${S * 0.13} M ${S * 0.13} ${-S * 0.13} L ${-S * 0.13} ${S * 0.13}`}
             stroke={C.warn}
             strokeWidth={1.4}
+            strokeLinecap="round"
+            opacity={0.9}
+          />
+        </g>
+      )}
+
+      {/* melee refused the order outright: two bars, not the blocked cross */}
+      {held && (
+        <g transform={`translate(${px(held.pos).x + S * 0.66}, ${px(held.pos).y - S * 0.66})`}>
+          <path
+            d={`M ${-S * 0.07} ${-S * 0.14} L ${-S * 0.07} ${S * 0.14} M ${S * 0.07} ${-S * 0.14} L ${S * 0.07} ${S * 0.14}`}
+            stroke={C.warn}
+            strokeWidth={1.6}
             strokeLinecap="round"
             opacity={0.9}
           />
@@ -309,6 +325,7 @@ function Board({
   slots,
   engagements,
   arcUnit,
+  lockedIds,
   shots,
   showShots,
   blockedIds,
@@ -503,12 +520,15 @@ function Board({
       })}
 
       {/* a refused ADV, called out where it happened */}
-      {blockedIds.map((id) => {
+      {[
+        ...blockedIds.map((id) => [id, 'BLOCKED'] as const),
+        ...lockedIds.map((id) => [id, 'LOCKED'] as const),
+      ].map(([id, word]) => {
         const unit = units.find((candidate) => candidate.id === id)
         if (!unit) return null
         const p = px(unit.pos)
         return (
-          <g key={`blocked-${id}`} transform={`translate(${p.x}, ${p.y - S * 0.98})`}>
+          <g key={`${word}-${id}`} transform={`translate(${p.x}, ${p.y - S * 0.98})`}>
             <g className="tc-blocked">
               <rect
                 x={-S * 0.62}
@@ -526,7 +546,7 @@ function Board({
                 fill={C.warn}
                 letterSpacing={S * 0.03}
               >
-                BLOCKED
+                {word}
               </text>
             </g>
           </g>

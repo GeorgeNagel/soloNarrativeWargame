@@ -230,15 +230,6 @@ export function applyAdvance(unit: UnitState, occupied: Set<string>): UnitState 
   return { ...unit, pos: target }
 }
 
-/** Advances this unit takes in `tick`, capped by its remaining allowance. */
-function advancesAt(unit: UnitState, slots: OrderSlots, tick: number): number {
-  const allowance = profileOf(unit).movement
-  let spentBefore = 0
-  for (let i = 0; i < tick; i += 1) spentBefore += slots[i]?.advances ?? 0
-  const wanted = Math.min(slots[tick]?.advances ?? 0, MAX_ADVANCES_PER_TICK)
-  return Math.max(0, Math.min(wanted, allowance - spentBefore))
-}
-
 /** Hexes held by everyone but `unit`, as of the given board state. */
 function occupiedBy(unit: UnitState, units: UnitState[]): Set<string> {
   return new Set(
@@ -248,31 +239,90 @@ function occupiedBy(unit: UnitState, units: UnitState[]): Set<string> {
   )
 }
 
+/** How melee pins a unit, judged on the board as a tick opens. */
+export interface MeleeLock {
+  /** Adjacent to at least one living enemy. */
+  engaged: boolean
+  /** At least one of those enemies sits across a front edge. */
+  frontally: boolean
+}
+
+/**
+ * The book's *Movement Within Combat*: hand-to-hand only concludes with the
+ * elimination of one side, so an engaged unit may not walk away. It may turn to
+ * meet an attack on its rear, but not while it is also held frontally.
+ */
+export function meleeLock(unit: UnitState, units: UnitState[]): MeleeLock {
+  let engaged = false
+  let frontally = false
+  for (const other of units) {
+    if (other.side === unit.side || !isAlive(other)) continue
+    if (!hexIsAdjacent(unit.pos, other.pos)) continue
+    engaged = true
+    if (!isRearAttack(unit, other.pos)) frontally = true
+  }
+  return { engaged, frontally }
+}
+
+export interface MoveResult {
+  units: UnitState[]
+  /** Advances refused because the destination hex was held or off-board. */
+  blockedIds: string[]
+  /** Units whose orders were refused because melee had hold of them. */
+  lockedIds: string[]
+  /** Units that spent this tick moving, and so may not shoot. */
+  advancedIds: Set<string>
+}
+
 /**
  * One tick of movement: everyone wheels, then advances in lockstep sub-steps so
  * a unit is blocked by where its neighbours are *now*, not where they started.
+ *
+ * `spent` carries each unit's used allowance across the ticks of a round and is
+ * updated in place. A locked unit spends nothing — its order never happened —
+ * while an advance refused for a held hex is still paid for.
  */
 function moveTick(
   start: UnitState[],
   orders: Record<string, OrderSlots>,
   tick: number,
-): { units: UnitState[]; blockedIds: string[]; advancedIds: Set<string> } {
-  let units = start.map((unit) => applyWheel(unit, orders[unit.id]?.[tick] ?? null))
+  spent: Map<string, number>,
+): MoveResult {
+  // The lock is judged before anyone moves, so a tick resolves against the
+  // engagements that existed when it opened.
+  const locks = new Map(start.map((unit) => [unit.id, meleeLock(unit, start)]))
   const blocked = new Set<string>()
-  // Ordering an advance counts as moving even if the hex turns out to be held,
-  // so a refused advance still costs the unit its shot.
-  const advanced = new Set(
-    units
-      .filter((unit) => advancesAt(unit, orders[unit.id] ?? [], tick) > 0)
-      .map((unit) => unit.id),
-  )
+  const locked = new Set<string>()
+  const advanced = new Set<string>()
+  const budget = new Map<string, number>()
+
+  for (const unit of start) {
+    if (!isAlive(unit)) continue
+    const lock = locks.get(unit.id)!
+    const order = orders[unit.id]?.[tick] ?? null
+    const wanted = Math.min(order?.advances ?? 0, MAX_ADVANCES_PER_TICK)
+    const left = profileOf(unit).movement - (spent.get(unit.id) ?? 0)
+    const allowed = lock.engaged ? 0 : Math.max(0, Math.min(wanted, left))
+    budget.set(unit.id, allowed)
+    if (lock.engaged && (wanted > 0 || (order?.wheel != null && lock.frontally))) {
+      locked.add(unit.id)
+    }
+    if (allowed > 0) advanced.add(unit.id)
+  }
+
+  let units = start.map((unit) => {
+    const lock = locks.get(unit.id)!
+    // held frontally: no turning at all. Held only from behind: turn to face it.
+    if (lock.engaged && lock.frontally) return unit
+    return applyWheel(unit, orders[unit.id]?.[tick] ?? null)
+  })
 
   for (let step = 0; step < MAX_ADVANCES_PER_TICK; step += 1) {
     const next = [...units]
     for (let i = 0; i < next.length; i += 1) {
       const unit = next[i]
       if (!isAlive(unit)) continue
-      if (advancesAt(unit, orders[unit.id] ?? [], tick) <= step) continue
+      if ((budget.get(unit.id) ?? 0) <= step) continue
       const moved = applyAdvance(unit, occupiedBy(unit, next))
       if (hexKey(moved.pos) === hexKey(unit.pos)) blocked.add(unit.id)
       next[i] = moved
@@ -280,7 +330,16 @@ function moveTick(
     units = next
   }
 
-  return { units, blockedIds: [...blocked], advancedIds: advanced }
+  for (const unit of start) {
+    spent.set(unit.id, (spent.get(unit.id) ?? 0) + (budget.get(unit.id) ?? 0))
+  }
+
+  return {
+    units,
+    blockedIds: [...blocked],
+    lockedIds: [...locked],
+    advancedIds: advanced,
+  }
 }
 
 // ── the round ─────────────────────────────────────────────
@@ -296,6 +355,8 @@ export interface TickFrame {
   engagements: Engagement[]
   /** Units whose advance was refused this tick (board edge or an occupied hex). */
   blockedIds: string[]
+  /** Units whose orders were refused this tick because melee had hold of them. */
+  lockedIds: string[]
   /** Units eliminated at this tick boundary. */
   eliminatedIds: string[]
 }
@@ -308,9 +369,15 @@ export function resolveRound(
 ): TickFrame[] {
   const frames: TickFrame[] = []
   let current = cloned(start)
+  const spent = new Map<string, number>()
 
   for (let tick = 0; tick < TICKS_PER_ROUND; tick += 1) {
-    const { units: moved, blockedIds, advancedIds } = moveTick(current, orders, tick)
+    const { units: moved, blockedIds, lockedIds, advancedIds } = moveTick(
+      current,
+      orders,
+      tick,
+      spent,
+    )
     const shots = shotsAmong(moved, advancedIds, roll)
     const engagements = engagementsAmong(moved, roll)
     const taken = tallyHits(shots, engagements)
@@ -327,6 +394,7 @@ export function resolveRound(
       shots,
       engagements,
       blockedIds,
+      lockedIds,
       eliminatedIds: units.filter((unit) => !isAlive(unit)).map((unit) => unit.id),
     })
     current = units
@@ -351,6 +419,8 @@ export interface PreviewStep {
   order: TickOrder | null
   /** Set when an advance could not be taken (edge of board / occupied). */
   blocked: boolean
+  /** Set when melee held the unit and refused its order outright. */
+  locked: boolean
 }
 
 export type PreviewMap = Record<string, PreviewStep[]>
@@ -370,10 +440,12 @@ export function previewAll(
   const steps: PreviewMap = {}
   for (const unit of start) steps[unit.id] = []
   let current = cloned(start)
+  const spent = new Map<string, number>()
 
   for (let tick = 0; tick < TICKS_PER_ROUND; tick += 1) {
-    const { units, blockedIds } = moveTick(current, orders, tick)
+    const { units, blockedIds, lockedIds } = moveTick(current, orders, tick, spent)
     const refused = new Set(blockedIds)
+    const held = new Set(lockedIds)
     for (const unit of units) {
       steps[unit.id].push({
         tick,
@@ -382,6 +454,7 @@ export function previewAll(
         angle: unit.angle,
         order: orders[unit.id]?.[tick] ?? null,
         blocked: refused.has(unit.id),
+        locked: held.has(unit.id),
       })
     }
     current = units

@@ -16,3 +16,5 @@
   per shared face. See `docs/combat.md`.
 - **Shooting** needs a tick the unit did not spend advancing. See
   `docs/shooting.md`.
+- **Engaged units are locked** and cannot advance out of a melee. The lock is
+  judged as each tick opens. See `docs/combat.md`.

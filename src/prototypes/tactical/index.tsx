@@ -285,6 +285,9 @@ function TacticalConsole() {
     for (const id of frame.blockedIds) {
       log.push({ k: `${tagOf(id)} ADV`, v: 'BLOCKED', tone: 'warn' })
     }
+    for (const id of frame.lockedIds) {
+      log.push({ k: `${tagOf(id)}`, v: 'HELD IN MELEE', tone: 'warn' })
+    }
   }
 
   const fights = frame ? frame.engagements.length : 0
@@ -372,6 +375,7 @@ function TacticalConsole() {
               shots={frame && showShots ? frame.shots : []}
               showShots={Boolean(showShots)}
               blockedIds={frame && playback?.step === 'move' ? frame.blockedIds : []}
+              lockedIds={frame && playback?.step === 'move' ? frame.lockedIds : []}
               showClash={Boolean(showClash)}
               beatKey={(playback?.index ?? 0) + round * 10}
               playing={playing}

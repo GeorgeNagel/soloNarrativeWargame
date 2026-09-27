@@ -504,6 +504,8 @@ function OrdersConsole({
             ['MELEE', 'BOTH SIDES ROLL d6 ± TYPE · HITS LAND TOGETHER'],
             ['ARMOUR', 'INFANTRY TAKE HALF · ROUNDED TO THE ATTACKER'],
             ['REAR', 'REAR 3 EDGES · HITS DOUBLED'],
+            ['LOCKED', 'ENGAGED UNITS CANNOT ADVANCE · MELEE ENDS IN A KILL'],
+            ['', 'A REAR-ONLY ATTACK MAY BE TURNED TO FACE · COSTS NOTHING'],
             ['GONE', `${HITS_TO_ELIMINATE} HITS ELIMINATES A UNIT`],
             ['BLOCKED', 'HEX HELD · ADV REFUSED, HEX SPENT'],
           ].map(([k, v]) => (

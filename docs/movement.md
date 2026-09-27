@@ -12,3 +12,6 @@
   which is how Cavalry spends 4 hexes across 3 ticks.
 - **Blocked moves**: if the destination hex is occupied when the advance
   resolves, the unit stays where it is and the allowance is still spent.
+- **Engaged units may not move**. A unit adjacent to a living enemy is locked in
+  melee: its advance is refused, and it may only turn if the attack is on its
+  rear alone. See `docs/combat.md`.
