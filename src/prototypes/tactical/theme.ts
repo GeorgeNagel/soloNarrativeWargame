@@ -233,7 +233,6 @@ export const CSS = `
 }
 .tc-mrow.head .tc-mtag{color:var(--dim);font-size:8px;letter-spacing:.16em;cursor:default;}
 .tc-dot{width:6px;height:6px;flex:0 0 6px;border:1px solid var(--warn);background:transparent;}
-.tc-dot.part{background:var(--warn);opacity:.55;}
 .tc-dot.armed{border-color:var(--plr);background:var(--plr);}
 .tc-cell{
   font:inherit;font-size:10px;letter-spacing:.04em;text-align:center;padding:4px 0;
@@ -248,7 +247,6 @@ export const CSS = `
 .tc-cell:disabled{cursor:default;}
 .tc-mrow.head .tc-cell{border-color:transparent;background:transparent;color:var(--dim);font-size:8px;letter-spacing:.16em;padding:2px 0;}
 .tc-mcount{font-size:9px;letter-spacing:.02em;color:var(--dim);display:flex;align-items:center;justify-content:flex-end;}
-.tc-mcount.part{color:var(--warn);}
 .tc-mcount.armed{color:var(--plr);}
 .tc-mrow.head .tc-mcount{font-size:8px;letter-spacing:.1em;}
 .tc-empty{padding:9px;font-size:9px;letter-spacing:.12em;color:var(--dim);}

@@ -3,20 +3,21 @@ import type { Hex, Point } from '../../engine'
 import { C } from './theme'
 import {
   HITS_TO_ELIMINATE,
+  ORDER_PHASES,
   canShoot,
   canShootAt,
-  decidedTicks,
   hexKey,
+  phaseCode,
   profileOf,
   queueState,
 } from './model'
-import type { OrderSlots, UnitState } from './model'
+import type { OrderBook, UnitState } from './model'
 import { isOnBoard } from './sim'
-import type { Engagement, PreviewMap, PreviewStep, Shot } from './sim'
+import type { Engagement, Preview, PreviewMap, Shot } from './sim'
 
 const S = 30
 const MARGIN = 7
-/** Matches the console's stagger: one beat per engagement in the tick. */
+/** Matches the console's stagger: one beat per engagement in the round. */
 const CLASH_STAGGER_MS = 260
 
 const FILES = 'ABCDEFG'
@@ -54,17 +55,16 @@ export interface BoardProps {
   units: UnitState[]
   selectedId: string | null
   onSelect: (id: string) => void
-  /** Joint dry-run of every queue; null while a round is resolving. */
+  /** Joint dry-run of every order; null while a round is resolving. */
   previews: PreviewMap | null
-  slots: Record<string, OrderSlots>
+  orders: OrderBook
   engagements: Engagement[]
   /**
    * The shooter whose field of fire to draw, already resolved to the position
-   * and facing its plan gives it at the focused tick. Null when there is
-   * nothing to aim.
+   * and facing its plan leaves it in. Null when there is nothing to aim.
    */
   arcUnit: UnitState | null
-  /** Units melee refused this tick — drawn like a blocked advance, worded apart. */
+  /** Units melee refused — drawn like a blocked advance, worded apart. */
   lockedIds: string[]
   shots: Shot[]
   /** Shots are drawn in their own beat, before the melee. */
@@ -83,7 +83,7 @@ function Token({
   unit,
   accent,
   selected,
-  filled,
+  marks,
   ring,
   playing,
   onSelect,
@@ -92,8 +92,9 @@ function Token({
   unit: UnitState
   accent: string
   selected: boolean
-  filled: number
-  ring: 'empty' | 'part' | null
+  /** One box per part of the order — turns, advance, turns — lit if it does something. */
+  marks: boolean[]
+  ring: 'empty' | null
   playing: boolean
   onSelect: (id: string) => void
   hit: boolean
@@ -113,14 +114,14 @@ function Token({
       aria-label={`${unit.tag}, ${profileOf(unit).label}, ${unit.hits} of ${HITS_TO_ELIMINATE} hits`}
     >
       <g className={hit ? 'tc-shake' : undefined}>
-        {/* unordered / part-ordered units wear an amber hex until their queue is full */}
+        {/* a unit nobody has ordered yet wears an amber hex */}
         {ring && (
           <polygon
             points={poly({ x: 0, y: 0 }, S * 0.97)}
             fill="none"
             stroke={C.warn}
             strokeWidth={1.3}
-            strokeDasharray={ring === 'empty' ? '2 4' : '7 4'}
+            strokeDasharray="2 4"
             opacity={0.85}
           />
         )}
@@ -185,15 +186,15 @@ function Token({
 
         {!playing && (
           <g transform={`translate(${-S * 0.3}, ${S * 0.62})`}>
-            {[0, 1, 2].map((i) => (
+            {marks.map((on, i) => (
               <rect
                 key={i}
                 x={i * (S * 0.22)}
                 y={0}
                 width={S * 0.16}
                 height={S * 0.1}
-                fill={i < filled ? accent : 'none'}
-                stroke={i < filled ? accent : C.lineHot}
+                fill={on ? accent : 'none'}
+                stroke={on ? accent : C.lineHot}
                 strokeWidth={0.8}
               />
             ))}
@@ -205,32 +206,26 @@ function Token({
 }
 
 /**
- * One unit's planned path: a dashed trace with a node per step and a labelled
- * END ghost. The selected unit draws bright; everyone else draws thin and
- * quiet, so three queues at once stay legible instead of turning into
- * spaghetti. No per-tick badges — the tick-by-tick reading lives in the
- * console's order matrix, and the board stays a map.
+ * One unit's planned round: a dashed trace with a node per hex advanced and a
+ * labelled END ghost showing where it finishes and which way it points. The
+ * selected unit draws bright; everyone else draws thin and quiet, so four
+ * orders at once stay legible instead of turning into spaghetti. No phase
+ * badges — the turn-advance-turn reading lives in the console's order matrix,
+ * and the board stays a map.
  */
 function Trace({
   unit,
-  steps,
+  preview,
   lead,
 }: {
   unit: UnitState
-  steps: PreviewStep[]
+  preview: Preview
   lead: boolean
 }) {
   const accent = accentOf(unit)
-  const points: Point[] = [px(unit.pos)]
-  for (const step of steps) {
-    const p = px(step.pos)
-    const last = points[points.length - 1]
-    if (last.x !== p.x || last.y !== p.y) points.push(p)
-  }
-  const end = steps[steps.length - 1] ?? null
-  const moved = end ? end.pos.q !== unit.pos.q || end.pos.r !== unit.pos.r : false
-  const blocked = steps.find((step) => step.blocked) ?? null
-  const held = steps.find((step) => step.locked) ?? null
+  const points: Point[] = [px(unit.pos), ...preview.path.map(px)]
+  const moved = preview.path.length > 0
+  const end = px(preview.pos)
 
   return (
     <g>
@@ -245,21 +240,20 @@ function Trace({
         />
       )}
 
-      {points.length > 1 &&
-        points.slice(1).map((p, i) => (
-          <circle
-            key={`node-${i}`}
-            cx={p.x}
-            cy={p.y}
-            r={lead ? 2.4 : 1.6}
-            fill={accent}
-            opacity={lead ? 0.85 : 0.4}
-          />
-        ))}
+      {points.slice(1).map((p, i) => (
+        <circle
+          key={`node-${i}`}
+          cx={p.x}
+          cy={p.y}
+          r={lead ? 2.4 : 1.6}
+          fill={accent}
+          opacity={lead ? 0.85 : 0.4}
+        />
+      ))}
 
       {/* a refused ADV still has to show, but as one quiet mark, not a badge */}
-      {blocked && (
-        <g transform={`translate(${px(blocked.pos).x + S * 0.66}, ${px(blocked.pos).y - S * 0.66})`}>
+      {preview.blocked && (
+        <g transform={`translate(${end.x + S * 0.66}, ${end.y - S * 0.66})`}>
           <path
             d={`M ${-S * 0.13} ${-S * 0.13} L ${S * 0.13} ${S * 0.13} M ${S * 0.13} ${-S * 0.13} L ${-S * 0.13} ${S * 0.13}`}
             stroke={C.warn}
@@ -271,8 +265,8 @@ function Trace({
       )}
 
       {/* melee refused the order outright: two bars, not the blocked cross */}
-      {held && (
-        <g transform={`translate(${px(held.pos).x + S * 0.66}, ${px(held.pos).y - S * 0.66})`}>
+      {preview.locked && (
+        <g transform={`translate(${end.x + S * 0.66}, ${end.y - S * 0.66})`}>
           <path
             d={`M ${-S * 0.07} ${-S * 0.14} L ${-S * 0.07} ${S * 0.14} M ${S * 0.07} ${-S * 0.14} L ${S * 0.07} ${S * 0.14}`}
             stroke={C.warn}
@@ -283,11 +277,8 @@ function Trace({
         </g>
       )}
 
-      {end && moved && (
-        <g
-          transform={`translate(${px(end.pos).x}, ${px(end.pos).y})`}
-          opacity={lead ? 0.6 : 0.34}
-        >
+      {moved && (
+        <g transform={`translate(${end.x}, ${end.y})`} opacity={lead ? 0.6 : 0.34}>
           <polygon
             points={poly({ x: 0, y: 0 }, S * 0.8)}
             fill="none"
@@ -295,7 +286,7 @@ function Trace({
             strokeWidth={lead ? 1.2 : 1}
             strokeDasharray="4 3"
           />
-          <g style={{ transform: `rotate(${end.angle}deg)` }}>
+          <g style={{ transform: `rotate(${preview.angle}deg)` }}>
             <path d={WEDGE} fill="none" stroke={accent} strokeWidth={1.2} />
           </g>
           {/* the label sits low in the ghost so the facing wedge stays clear of it */}
@@ -322,7 +313,7 @@ function Board({
   selectedId,
   onSelect,
   previews,
-  slots,
+  orders,
   engagements,
   arcUnit,
   lockedIds,
@@ -359,7 +350,7 @@ function Board({
       ? tiles.filter((tile) => canShootAt(arcUnit, tile))
       : []
 
-  // One beat per engagement, numbered to match the console's tick log.
+  // One beat per engagement, numbered to match the console's round log.
   const beatOf = new Map<string, number>()
   engagements.forEach((fight, i) => beatOf.set(`${fight.aId}|${fight.bId}`, i))
 
@@ -483,18 +474,18 @@ function Board({
         />
       )}
 
-      {/* every queued path at once — quiet ones first, the selected one on top */}
+      {/* every ordered path at once — quiet ones first, the selected one on top */}
       {previews &&
         [...units]
           .sort((a, b) => Number(a.id === selectedId) - Number(b.id === selectedId))
           .map((unit) => {
-            const steps = previews[unit.id] ?? []
-            if (steps.every((step) => !step.order)) return null
+            const preview = previews[unit.id]
+            if (!preview?.order) return null
             return (
               <Trace
                 key={`trace-${unit.id}`}
                 unit={unit}
-                steps={steps}
+                preview={preview}
                 lead={unit.id === selectedId}
               />
             )
@@ -502,16 +493,18 @@ function Board({
 
       {/* units */}
       {units.map((unit) => {
-        const queue = slots[unit.id] ?? []
-        const state = queueState(queue)
+        const order = orders[unit.id] ?? null
+        const unordered = queueState(order) === 'empty'
         return (
           <Token
             key={unit.id}
             unit={unit}
             accent={accentOf(unit)}
             selected={unit.id === selectedId}
-            filled={decidedTicks(queue)}
-            ring={!playing && unit.side === 'player' && state !== 'armed' ? state : null}
+            marks={ORDER_PHASES.map(
+              (phase) => order != null && !['—', 'HLD'].includes(phaseCode(order, phase)),
+            )}
+            ring={!playing && unit.side === 'player' && unordered ? 'empty' : null}
             playing={playing}
             onSelect={onSelect}
             hit={hitIds.has(unit.id)}
@@ -612,7 +605,7 @@ function Board({
         </g>
       )}
 
-      {/* tick-boundary contact scan + clash beats */}
+      {/* end-of-round contact scan + clash beats */}
       {showClash && (
         <g key={beatKey} pointerEvents="none">
           {units.map((unit) => (
