@@ -138,6 +138,63 @@ export function prune<L>(tree: Tree<L>, maxDepth: number): Tree<L> {
   return walk(tree, 1)
 }
 
+// ── simplification ────────────────────────────────────────
+
+/**
+ * The window of values a feature can still hold on the path to a node:
+ * `[low, high)`, half-open, because a branch sends `value < threshold` one way
+ * and `value >= threshold` the other.
+ */
+type Window = [number, number]
+
+function narrowed(
+  bounds: Record<string, Window>,
+  feature: string,
+  window: Window,
+): Record<string, Window> {
+  return { ...bounds, [feature]: window }
+}
+
+/**
+ * Fold away branches no feature vector can reach.
+ *
+ * Crossover and mutation happily graft a test that a test further up has
+ * already decided — `foeCanShoot < 0.5` below a branch that took the
+ * `foeCanShoot >= 0.5` side, say. The subtree behind it can never be evaluated,
+ * so it is dead weight: it inflates the node count, and it prints as tactics
+ * the genome cannot perform. Keeping the reachable side in its place preserves
+ * behaviour exactly.
+ */
+export function simplifyTree<L>(
+  tree: Tree<L>,
+  bounds: Record<string, Window> = {},
+): Tree<L> {
+  if (tree.kind === 'leaf') return leaf(tree.value)
+
+  const [low, high] = bounds[tree.feature] ?? [-Infinity, Infinity]
+  const t = tree.threshold
+
+  // everything still possible is already at or above the threshold
+  if (low >= t) return simplifyTree(tree.atOrAbove, bounds)
+  // everything still possible is already below it
+  if (high <= t) return simplifyTree(tree.below, bounds)
+
+  return branch(
+    tree.feature,
+    t,
+    simplifyTree(tree.below, narrowed(bounds, tree.feature, [low, Math.min(high, t)])),
+    simplifyTree(
+      tree.atOrAbove,
+      narrowed(bounds, tree.feature, [Math.max(low, t), high]),
+    ),
+  )
+}
+
+/** Nodes that no feature vector can reach — `sizeOf` minus the reachable size. */
+export function deadNodesOf<L>(tree: Tree<L>): number {
+  return sizeOf(tree) - sizeOf(simplifyTree(tree))
+}
+
 // ── growth ────────────────────────────────────────────────
 
 /** A threshold on the mid-points between a feature's steps, never on a step. */

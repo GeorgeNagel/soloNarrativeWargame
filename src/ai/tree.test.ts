@@ -6,10 +6,12 @@ import {
   copyTree,
   crossover,
   depthOf,
+  deadNodesOf,
   describeTree,
   evaluate,
   leaf,
   leavesOf,
+  simplifyTree,
   mutate,
   nudgeThreshold,
   prune,
@@ -206,5 +208,85 @@ describe('describeTree', () => {
     expect(describeTree(tree, (value) => `→ ${value}`)).toBe(
       ['range < 3.5', '  → 1', 'else', '  → 2'].join('\n'),
     )
+  })
+})
+
+describe('simplifyTree', () => {
+  it('drops a branch the test above it has already decided', () => {
+    // inside `shoots >= 0.5`, a second `shoots < 0.5` can only go one way
+    const tree = branch(
+      'shoots',
+      0.5,
+      leaf('near'),
+      branch('shoots', 0.5, leaf('unreachable'), leaf('far')),
+    )
+    expect(simplifyTree(tree)).toEqual(branch('shoots', 0.5, leaf('near'), leaf('far')))
+    expect(deadNodesOf(tree)).toBe(2)
+  })
+
+  it('folds a redundant test on the below side too', () => {
+    const tree = branch(
+      'range',
+      3.5,
+      branch('range', 3.5, leaf('kept'), leaf('unreachable')),
+      leaf('far'),
+    )
+    expect(simplifyTree(tree)).toEqual(branch('range', 3.5, leaf('kept'), leaf('far')))
+  })
+
+  it('narrows through nested thresholds on the same feature', () => {
+    // range < 2.5 makes the inner range < 5.5 test always true
+    const tree = branch(
+      'range',
+      2.5,
+      branch('range', 5.5, leaf('close'), leaf('unreachable')),
+      leaf('far'),
+    )
+    expect(simplifyTree(tree)).toEqual(branch('range', 2.5, leaf('close'), leaf('far')))
+  })
+
+  it('keeps a genuinely different threshold on the same feature', () => {
+    const tree = branch(
+      'range',
+      5.5,
+      branch('range', 2.5, leaf('close'), leaf('middle')),
+      leaf('far'),
+    )
+    expect(simplifyTree(tree)).toEqual(tree)
+    expect(deadNodesOf(tree)).toBe(0)
+  })
+
+  it('leaves a tree that tests different features alone', () => {
+    const tree = branch('range', 3.5, branch('hits', 7.5, leaf('a'), leaf('b')), leaf('c'))
+    expect(simplifyTree(tree)).toEqual(tree)
+  })
+
+  it('never changes what a tree decides', () => {
+    const rng = makeRng(21)
+    let shrank = 0
+    for (let trial = 0; trial < 500; trial += 1) {
+      const tree = randomTree(SPEC, rng)
+      const simple = simplifyTree(tree)
+      expect(sizeOf(simple)).toBeLessThanOrEqual(sizeOf(tree))
+      if (sizeOf(simple) < sizeOf(tree)) shrank += 1
+      for (let probe = 0; probe < 40; probe += 1) {
+        const features: Record<string, number> = {}
+        for (const feature of SPEC.features) {
+          features[feature.key] = rng.range(feature.min, feature.max)
+        }
+        expect(evaluate(simple, features)).toEqual(evaluate(tree, features))
+      }
+    }
+    // the check above is only worth anything if these trees really do carry
+    // dead branches — they do, in roughly half of them
+    expect(shrank).toBeGreaterThan(100)
+  })
+
+  it('leaves nothing behind that a second pass could remove', () => {
+    const rng = makeRng(22)
+    for (let trial = 0; trial < 200; trial += 1) {
+      const simple = simplifyTree(randomTree(SPEC, rng))
+      expect(deadNodesOf(simple)).toBe(0)
+    }
   })
 })
