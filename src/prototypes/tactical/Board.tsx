@@ -1,14 +1,14 @@
 import { hexCorners, hexHeight, hexNeighbor, hexToPixel, hexWidth } from '../../engine'
 import type { Hex, Point } from '../../engine'
 import { C } from './theme'
-import { assignedPoints, hexKey, queueState } from './model'
+import { HITS_TO_ELIMINATE, decidedTicks, hexKey, profileOf, queueState } from './model'
 import type { OrderSlots, UnitState } from './model'
 import { isOnBoard } from './sim'
-import type { ClashEvent, PreviewMap, PreviewStep } from './sim'
+import type { Engagement, PreviewMap, PreviewStep } from './sim'
 
 const S = 30
 const MARGIN = 7
-/** Matches the console's clash stagger: one beat per melee in the tick. */
+/** Matches the console's stagger: one beat per engagement in the tick. */
 const CLASH_STAGGER_MS = 260
 
 const FILES = 'ABCDEFG'
@@ -49,7 +49,7 @@ export interface BoardProps {
   /** Joint dry-run of every queue; null while a round is resolving. */
   previews: PreviewMap | null
   slots: Record<string, OrderSlots>
-  clashes: ClashEvent[]
+  engagements: Engagement[]
   blockedIds: string[]
   showClash: boolean
   beatKey: number
@@ -80,7 +80,7 @@ function Token({
   hit: boolean
 }) {
   const center = px(unit.pos)
-  const frac = unit.models / unit.startModels
+  const frac = Math.max(0, 1 - unit.hits / HITS_TO_ELIMINATE)
   const ringR = S * 0.72
   const circ = 2 * Math.PI * ringR
 
@@ -91,7 +91,7 @@ function Token({
       onClick={() => onSelect(unit.id)}
       role="button"
       tabIndex={0}
-      aria-label={`${unit.tag}, ${unit.models} models`}
+      aria-label={`${unit.tag}, ${profileOf(unit).label}, ${unit.hits} of ${HITS_TO_ELIMINATE} hits`}
     >
       <g className={hit ? 'tc-shake' : undefined}>
         {/* unordered / part-ordered units wear an amber hex until their queue is full */}
@@ -130,10 +130,10 @@ function Token({
         />
 
         <text
-          y={-S * 0.26}
+          y={-S * 0.3}
           textAnchor="middle"
           dominantBaseline="middle"
-          fontSize={S * 0.24}
+          fontSize={S * 0.22}
           letterSpacing={S * 0.02}
           fill={accent}
           opacity={0.85}
@@ -141,14 +141,27 @@ function Token({
           {unit.tag}
         </text>
         <text
-          y={S * 0.2}
+          y={-S * 0.05}
           textAnchor="middle"
           dominantBaseline="middle"
-          fontSize={S * 0.6}
+          fontSize={S * 0.26}
           fontWeight={700}
-          fill={C.bright}
+          letterSpacing={S * 0.04}
+          fill={accent}
         >
-          {unit.models}
+          {profileOf(unit).code}
+        </text>
+        {/* hits climb towards 15; a clean unit keeps its box quiet */}
+        <text
+          y={S * 0.32}
+          textAnchor="middle"
+          dominantBaseline="middle"
+          fontSize={S * 0.42}
+          fontWeight={700}
+          fill={unit.hits > 0 ? C.warn : C.dim}
+          opacity={unit.hits > 0 ? 1 : 0.65}
+        >
+          {`${unit.hits}/${HITS_TO_ELIMINATE}`}
         </text>
 
         {!playing && (
@@ -277,7 +290,7 @@ function Board({
   onSelect,
   previews,
   slots,
-  clashes,
+  engagements,
   blockedIds,
   showClash,
   beatKey,
@@ -291,18 +304,19 @@ function Board({
 
   const occupied = new Map(units.map((unit) => [hexKey(unit.pos), unit]))
   const selected = units.find((unit) => unit.id === selectedId) ?? null
-  const hitIds = new Set(
-    showClash ? clashes.filter((c) => c.kills > 0).map((c) => c.defenderId) : [],
-  )
+  const hitIds = new Set<string>()
+  if (showClash) {
+    for (const fight of engagements) {
+      if (fight.a.hits > 0) hitIds.add(fight.bId)
+      if (fight.b.hits > 0) hitIds.add(fight.aId)
+    }
+  }
 
   const forward = selected && !playing ? hexNeighbor(selected.pos, selected.facing) : null
 
-  // One beat per contacting pair, numbered to match the console's tick log.
-  const pairIndex = new Map<string, number>()
-  for (const clash of clashes) {
-    const key = [clash.attackerId, clash.defenderId].sort().join('|')
-    if (!pairIndex.has(key)) pairIndex.set(key, pairIndex.size)
-  }
+  // One beat per engagement, numbered to match the console's tick log.
+  const beatOf = new Map<string, number>()
+  engagements.forEach((fight, i) => beatOf.set(`${fight.aId}|${fight.bId}`, i))
 
   return (
     <svg
@@ -431,14 +445,14 @@ function Board({
       {/* units */}
       {units.map((unit) => {
         const queue = slots[unit.id] ?? []
-        const state = queueState(queue, unit.stats.movement)
+        const state = queueState(queue)
         return (
           <Token
             key={unit.id}
             unit={unit}
             accent={accentOf(unit)}
             selected={unit.id === selectedId}
-            filled={assignedPoints(queue)}
+            filled={decidedTicks(queue)}
             ring={!playing && unit.side === 'player' && state !== 'armed' ? state : null}
             playing={playing}
             onSelect={onSelect}
@@ -494,95 +508,102 @@ function Board({
               strokeDasharray="4 5"
             />
           ))}
-          {clashes.map((clash, i) => {
-            const attacker = units.find((u) => u.id === clash.attackerId)
-            const defender = units.find((u) => u.id === clash.defenderId)
-            if (!attacker || !defender) return null
-            const a = px(attacker.pos)
-            const d = px(defender.pos)
-            const mid = { x: (a.x + d.x) / 2, y: (a.y + d.y) / 2 }
-            // one burst per contacting pair, but a loss tally per defender
-            const first = clash.attackerId < clash.defenderId
-            const edge = sharedEdge(a, d)
-            const rises = defender.pos.r > 1
-            const away = d.x >= a.x ? 1 : -1
-            const order = pairIndex.get([clash.attackerId, clash.defenderId].sort().join('|')) ?? 0
-            const delay = { animationDelay: `${order * CLASH_STAGGER_MS}ms` }
+          {engagements.map((fight) => {
+            const a = units.find((u) => u.id === fight.aId)
+            const b = units.find((u) => u.id === fight.bId)
+            if (!a || !b) return null
+            const pa = px(a.pos)
+            const pb = px(b.pos)
+            const mid = { x: (pa.x + pb.x) / 2, y: (pa.y + pb.y) / 2 }
+            const edge = sharedEdge(pa, pb)
+            const beat = beatOf.get(`${fight.aId}|${fight.bId}`) ?? 0
+            const delay = { animationDelay: `${beat * CLASH_STAGGER_MS}ms` }
+            // a rear blow either way paints the whole engagement hot
+            const rear = fight.a.rear || fight.b.rear
+            const tone = rear ? C.warn : C.bright
+
+            // one tally per side: what that unit acquired in this engagement
+            const tallies: { unit: UnitState; at: Point; hits: number; rear: boolean }[] = [
+              { unit: b, at: pb, hits: fight.a.hits, rear: fight.a.rear },
+              { unit: a, at: pa, hits: fight.b.hits, rear: fight.b.rear },
+            ]
+
             return (
-              <g key={`clash-${i}`}>
-                {first && edge && (
+              <g key={`fight-${fight.aId}-${fight.bId}`}>
+                {edge && (
                   <g className="tc-edge" style={delay}>
                     <line
                       x1={edge[0].x}
                       y1={edge[0].y}
                       x2={edge[1].x}
                       y2={edge[1].y}
-                      stroke={clash.flank ? C.warn : C.bright}
+                      stroke={tone}
                       strokeWidth={4}
                       strokeLinecap="round"
                     />
                   </g>
                 )}
-                {first && (
-                  /* the animation drives `transform`, so placement sits on a wrapper */
-                  <g transform={`translate(${mid.x}, ${mid.y})`}>
-                    <g className="tc-burst" style={delay}>
-                      <circle r={S * 0.3} fill={C.paper} opacity={0.9} />
-                      <path
-                        d={`M ${-S * 0.19} ${-S * 0.19} L ${S * 0.19} ${S * 0.19} M ${S * 0.19} ${-S * 0.19} L ${-S * 0.19} ${S * 0.19}`}
-                        stroke={clash.flank ? C.warn : C.bright}
-                        strokeWidth={2.2}
-                      />
-                      <circle
-                        r={S * 0.3}
-                        fill="none"
-                        stroke={clash.flank ? C.warn : C.bright}
-                        strokeWidth={1}
-                        opacity={0.85}
-                      />
-                      {pairIndex.size > 1 && (
-                        <text
-                          x={S * 0.42}
-                          y={-S * 0.3}
-                          textAnchor="middle"
-                          dominantBaseline="middle"
-                          fontSize={S * 0.26}
-                          fontWeight={700}
-                          fill={C.bright}
-                          stroke={C.paper}
-                          strokeWidth={0.8}
-                          paintOrder="stroke"
-                        >
-                          {order + 1}
-                        </text>
-                      )}
-                    </g>
-                  </g>
-                )}
-                <g
-                  transform={`translate(${d.x + away * S * 0.95}, ${
-                    d.y + (rises ? -S * 0.7 : S * 0.7)
-                  })`}
-                >
-                  <g className={rises ? 'tc-float' : 'tc-floatd'} style={delay}>
-                    <text
-                      textAnchor="middle"
-                      fontSize={S * 0.42}
-                      fontWeight={700}
-                      fill={accentOf(defender)}
-                      stroke={C.paper}
-                      strokeWidth={0.8}
-                      paintOrder="stroke"
-                    >
-                      {`-${clash.kills}`}
-                    </text>
-                    {clash.flank && (
-                      <text textAnchor="middle" y={S * 0.34} fontSize={S * 0.2} fill={C.warn}>
-                        FLANK
+
+                {/* the animation drives `transform`, so placement sits on a wrapper */}
+                <g transform={`translate(${mid.x}, ${mid.y})`}>
+                  <g className="tc-burst" style={delay}>
+                    <circle r={S * 0.3} fill={C.paper} opacity={0.9} />
+                    <path
+                      d={`M ${-S * 0.19} ${-S * 0.19} L ${S * 0.19} ${S * 0.19} M ${S * 0.19} ${-S * 0.19} L ${-S * 0.19} ${S * 0.19}`}
+                      stroke={tone}
+                      strokeWidth={2.2}
+                    />
+                    <circle r={S * 0.3} fill="none" stroke={tone} strokeWidth={1} opacity={0.85} />
+                    {engagements.length > 1 && (
+                      <text
+                        x={S * 0.42}
+                        y={-S * 0.3}
+                        textAnchor="middle"
+                        dominantBaseline="middle"
+                        fontSize={S * 0.26}
+                        fontWeight={700}
+                        fill={C.bright}
+                        stroke={C.paper}
+                        strokeWidth={0.8}
+                        paintOrder="stroke"
+                      >
+                        {beat + 1}
                       </text>
                     )}
                   </g>
                 </g>
+
+                {tallies.map(({ unit, at, hits, rear: viaRear }) => {
+                  const rises = unit.pos.r > 1
+                  const away = at.x >= mid.x ? 1 : -1
+                  return (
+                    <g
+                      key={`tally-${fight.aId}-${fight.bId}-${unit.id}`}
+                      transform={`translate(${at.x + away * S * 0.95}, ${
+                        at.y + (rises ? -S * 0.7 : S * 0.7)
+                      })`}
+                    >
+                      <g className={rises ? 'tc-float' : 'tc-floatd'} style={delay}>
+                        <text
+                          textAnchor="middle"
+                          fontSize={S * 0.42}
+                          fontWeight={700}
+                          fill={accentOf(unit)}
+                          stroke={C.paper}
+                          strokeWidth={0.8}
+                          paintOrder="stroke"
+                        >
+                          {`+${hits}`}
+                        </text>
+                        {viaRear && (
+                          <text textAnchor="middle" y={S * 0.34} fontSize={S * 0.2} fill={C.warn}>
+                            REAR
+                          </text>
+                        )}
+                      </g>
+                    </g>
+                  )
+                })}
               </g>
             )
           })}

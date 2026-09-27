@@ -1,23 +1,28 @@
 import { useEffect, useMemo, useState } from 'react'
 import Board from './Board'
 import OrdersConsole from './OrdersConsole'
-import type { LogRow, SlotFocus } from './OrdersConsole'
+import type { LogRow, PadAction, SlotFocus } from './OrdersConsole'
 import { CSS } from './theme'
 import {
+  HOLD,
+  MAX_ADVANCES_PER_TICK,
   TICKS_PER_ROUND,
-  assignedPoints,
   boardTiles,
+  decidedTicks,
   emptySlots,
   initialUnits,
+  isReady,
+  profileOf,
+  spentAdvances,
 } from './model'
-import type { OrderKind, OrderSlots, UnitState } from './model'
-import { previewAll, resolveRound } from './sim'
+import type { OrderSlots, TickOrder, UnitState } from './model'
+import { d6, previewAll, resolveRound, survivors } from './sim'
 import type { PreviewMap, TickFrame } from './sim'
 
 const SCENARIO = 'ST. AUBIN FORD'
 const MOVE_MS = 640
 const CLASH_MS = 900
-/** Each extra melee in the same tick gets its own beat, so they read in order. */
+/** Each extra engagement in the same tick gets its own beat, so they read in order. */
 const CLASH_STAGGER_MS = 260
 
 interface Playback {
@@ -32,19 +37,16 @@ function freshSlots(units: UnitState[]): Record<string, OrderSlots> {
     // The AI opponent in this prototype just stands fast.
     next[unit.id] =
       unit.side === 'enemy'
-        ? Array.from({ length: TICKS_PER_ROUND }, () => 'hold' as OrderKind)
+        ? Array.from({ length: TICKS_PER_ROUND }, () => HOLD)
         : emptySlots()
   }
   return next
 }
 
-function firstEmpty(queue: OrderSlots): number | null {
+/** The first tick this unit has not decided yet. */
+function firstUndecided(queue: OrderSlots): number | null {
   for (let i = 0; i < queue.length; i += 1) if (!queue[i]) return i
   return null
-}
-
-function isArmed(unit: UnitState, slots: Record<string, OrderSlots>): boolean {
-  return assignedPoints(slots[unit.id] ?? []) >= unit.stats.movement
 }
 
 function TacticalConsole() {
@@ -60,14 +62,15 @@ function TacticalConsole() {
 
   const playing = playback !== null
   const playerUnits = units.filter((unit) => unit.side === 'player')
+  const enemyUnits = units.filter((unit) => unit.side === 'enemy')
 
   // ── playback clock ──────────────────────────────────────
   useEffect(() => {
     if (!playback) return
     const frame = playback.frames[playback.index]
-    const pairs = Math.max(1, Math.ceil(frame.clashes.length / 2))
+    const beats = Math.max(1, frame.engagements.length)
     const ms =
-      playback.step === 'move' ? MOVE_MS : CLASH_MS + (pairs - 1) * CLASH_STAGGER_MS
+      playback.step === 'move' ? MOVE_MS : CLASH_MS + (beats - 1) * CLASH_STAGGER_MS
     const timer = window.setTimeout(() => {
       if (playback.step === 'move') {
         setPlayback({ ...playback, step: 'clash' })
@@ -77,17 +80,15 @@ function TacticalConsole() {
         setPlayback({ ...playback, index: playback.index + 1, step: 'move' })
         return
       }
-      const settled = playback.frames[playback.frames.length - 1].units.filter(
-        (unit) => unit.models > 0,
-      )
-      const survivor =
+      const settled = survivors(playback.frames)
+      const next =
         settled.find((unit) => unit.id === selectedId) ??
         settled.find((unit) => unit.side === 'player') ??
         null
       setUnits(settled)
       setSlots(freshSlots(settled))
-      setSelectedId(survivor ? survivor.id : null)
-      setFocus(survivor && survivor.side === 'player' ? { unitId: survivor.id, tick: 0 } : null)
+      setSelectedId(next ? next.id : null)
+      setFocus(next && next.side === 'player' ? { unitId: next.id, tick: 0 } : null)
       setRound((value) => value + 1)
       setPlayback(null)
     }, ms)
@@ -95,7 +96,7 @@ function TacticalConsole() {
   }, [playback, selectedId])
 
   // ── selection ───────────────────────────────────────────
-  const nextUnorderedFrom = (
+  const nextUnreadyFrom = (
     afterId: string | null,
     map: Record<string, OrderSlots> = slots,
   ): string | null => {
@@ -104,7 +105,7 @@ function TacticalConsole() {
     const start = afterId ? roster.findIndex((unit) => unit.id === afterId) : -1
     for (let step = 1; step <= roster.length; step += 1) {
       const unit = roster[(start + step + roster.length) % roster.length]
-      if (!isArmed(unit, map)) return unit.id
+      if (!isReady(map[unit.id] ?? [])) return unit.id
     }
     return null
   }
@@ -116,8 +117,8 @@ function TacticalConsole() {
       setFocus(null)
       return
     }
-    const empty = firstEmpty(slots[id] ?? emptySlots())
-    setFocus({ unitId: id, tick: empty ?? 0 })
+    const open = firstUndecided(slots[id] ?? emptySlots())
+    setFocus({ unitId: id, tick: open ?? 0 })
   }
 
   const cycle = (delta: number) => {
@@ -128,28 +129,52 @@ function TacticalConsole() {
   }
 
   // ── order editing ───────────────────────────────────────
-  const addOrder = (kind: OrderKind) => {
+  /**
+   * Wheels are free, so they set the facing on the focused tick and leave the
+   * focus where it is — you will usually want to advance out of the turn. An
+   * advance or a hold decides the tick, so the focus moves on.
+   */
+  const order = (action: PadAction) => {
     if (playing || !focus) return
     const unit = units.find((candidate) => candidate.id === focus.unitId)
     if (!unit || unit.side === 'enemy') return
+
     const queue = [...(slots[unit.id] ?? emptySlots())]
-    queue[focus.tick] = kind
+    const current: TickOrder = queue[focus.tick] ?? { wheel: null, advances: 0 }
+
+    if (action === 'left' || action === 'right') {
+      queue[focus.tick] = { ...current, wheel: action }
+      setSlots({ ...slots, [unit.id]: queue })
+      return
+    }
+
+    if (action === 'advance') {
+      const left = profileOf(unit).movement - spentAdvances(queue)
+      if (left <= 0) return
+      queue[focus.tick] = {
+        ...current,
+        advances: Math.min(current.advances + 1, MAX_ADVANCES_PER_TICK),
+      }
+    } else {
+      queue[focus.tick] = { wheel: null, advances: 0 }
+    }
+
     const merged = { ...slots, [unit.id]: queue }
     setSlots(merged)
 
-    const empty = firstEmpty(queue)
-    if (empty !== null) {
-      setFocus({ unitId: unit.id, tick: empty })
+    const open = firstUndecided(queue)
+    if (open !== null) {
+      setFocus({ unitId: unit.id, tick: open })
       return
     }
-    // Queue just filled: hop to the next unit still short of points.
-    const next = nextUnorderedFrom(unit.id, merged)
+    // Queue just filled: hop to the next unit with ticks still open.
+    const next = nextUnreadyFrom(unit.id, merged)
     if (!next) {
       setFocus(null)
       return
     }
     setSelectedId(next)
-    setFocus({ unitId: next, tick: firstEmpty(merged[next] ?? emptySlots()) ?? 0 })
+    setFocus({ unitId: next, tick: firstUndecided(merged[next] ?? emptySlots()) ?? 0 })
   }
 
   const clearSlot = (unitId: string, tick: number) => {
@@ -168,19 +193,18 @@ function TacticalConsole() {
     setFocus({ unitId, tick: 0 })
   }
 
-  // ── commit gate: every friendly unit, every point ───────
-  const armedCount = playerUnits.filter((unit) => isArmed(unit, slots)).length
-  const playerAssigned = playerUnits.reduce(
-    (sum, unit) => sum + assignedPoints(slots[unit.id] ?? []),
+  // ── commit gate: every friendly unit, every tick decided ─
+  const armedCount = playerUnits.filter((unit) => isReady(slots[unit.id] ?? [])).length
+  const decided = playerUnits.reduce(
+    (sum, unit) => sum + decidedTicks(slots[unit.id] ?? []),
     0,
   )
-  const playerTotal = playerUnits.reduce((sum, unit) => sum + unit.stats.movement, 0)
   const ready = playerUnits.length > 0 && armedCount === playerUnits.length
 
   const commit = () => {
     if (!ready || playing) return
     setFocus(null)
-    setPlayback({ frames: resolveRound(units, slots), index: 0, step: 'move' })
+    setPlayback({ frames: resolveRound(units, slots, d6), index: 0, step: 'move' })
   }
 
   // ── what the board shows right now ──────────────────────
@@ -192,45 +216,54 @@ function TacticalConsole() {
   // Every friendly queue is dry-run together, so traces account for each other.
   const previews: PreviewMap | null = playing ? null : previewAll(units, slots)
 
-  // ── live tick log: several melees in one tick, listed ───
+  // ── live tick log ───────────────────────────────────────
   const log: LogRow[] = []
   if (frame) {
     const tagOf = (id: string) => shown.find((unit) => unit.id === id)?.tag ?? id
+    const sideOf = (id: string) => shown.find((unit) => unit.id === id)?.side
     if (showClash) {
-      frame.clashes.forEach((clash, i) => {
-        const defender = shown.find((unit) => unit.id === clash.defenderId)
-        log.push({
-          k: `${i + 1} · ${tagOf(clash.attackerId)} → ${tagOf(clash.defenderId)}${
-            clash.flank ? ' FLANK' : ''
-          }`,
-          v: `-${clash.kills} MDL`,
-          tone: defender?.side === 'player' ? 'hot' : 'ok',
-        })
+      frame.engagements.forEach((fight, i) => {
+        const beat = frame.engagements.length > 1 ? `${i + 1} · ` : ''
+        // one row per blow, so both halves of the engagement are readable
+        for (const [blow, targetId] of [
+          [fight.a, fight.bId],
+          [fight.b, fight.aId],
+        ] as const) {
+          log.push({
+            k: `${beat}${tagOf(
+              targetId === fight.bId ? fight.aId : fight.bId,
+            )} → ${tagOf(targetId)}${blow.rear ? ' REAR' : ''}`,
+            v: `d${blow.roll} · +${blow.hits}`,
+            tone: sideOf(targetId) === 'player' ? 'hot' : 'ok',
+          })
+        }
       })
+      for (const id of frame.eliminatedIds) {
+        log.push({ k: `${tagOf(id)}`, v: 'ELIMINATED', tone: 'warn' })
+      }
     }
     for (const id of frame.blockedIds) {
       log.push({ k: `${tagOf(id)} ADV`, v: 'BLOCKED', tone: 'warn' })
     }
   }
 
-  const melees = frame ? Math.ceil(frame.clashes.length / 2) : 0
-  const wiped =
-    !playing && (playerUnits.length === 0 || units.every((unit) => unit.side === 'player'))
-  const phase = wiped
+  const fights = frame ? frame.engagements.length : 0
+  const over = !playing && (playerUnits.length === 0 || enemyUnits.length === 0)
+  const phase = over
     ? playerUnits.length === 0
       ? 'LINE BROKEN — FIELD LOST'
       : 'FIELD HELD — OPFOR BROKEN'
     : playing
-    ? showClash
-      ? frame?.contact
-        ? melees > 1
-          ? `${melees} MELEES`
-          : 'CONTACT — MELEE'
-        : 'TICK BOUNDARY — CLEAR'
-      : `TICK ${(liveTick ?? 0) + 1} — MANOEUVRE`
-    : ready
-      ? 'ORDERS READY'
-      : 'PLANNING'
+      ? showClash
+        ? fights > 0
+          ? fights > 1
+            ? `${fights} ENGAGEMENTS`
+            : 'CONTACT — MELEE'
+          : 'TICK BOUNDARY — CLEAR'
+        : `TICK ${(liveTick ?? 0) + 1} — MANOEUVRE`
+      : ready
+        ? 'ORDERS READY'
+        : 'PLANNING'
 
   return (
     <div className="tc-root">
@@ -274,12 +307,11 @@ function TacticalConsole() {
         <div className="tc-stage">
           <div className="tc-stage-rail">
             <span>
-              GRID 7×7 · {playerUnits.length} v{' '}
-              {units.length - playerUnits.length} PIKE
+              GRID 7×7 · {playerUnits.length} v {enemyUnits.length}
             </span>
             <span>
               {playing
-                ? `RESOLVE ${(liveTick ?? 0) + 1}/3`
+                ? `RESOLVE ${(liveTick ?? 0) + 1}/${TICKS_PER_ROUND}`
                 : `${armedCount}/${playerUnits.length} ARMED`}
             </span>
           </div>
@@ -291,7 +323,7 @@ function TacticalConsole() {
               onSelect={select}
               previews={previews}
               slots={slots}
-              clashes={frame?.clashes ?? []}
+              engagements={frame && showClash ? frame.engagements : []}
               blockedIds={frame && !showClash ? frame.blockedIds : []}
               showClash={Boolean(showClash)}
               beatKey={(playback?.index ?? 0) + round * 10}
@@ -299,7 +331,9 @@ function TacticalConsole() {
             />
           </div>
           <div className="tc-stage-rail foot">
-            <span>ADV = INTO FACED HEX · L60/R60 = WHEEL · REAR 3 EDGES = FLANK, DEF ÷2</span>
+            <span>
+              WHEELS FREE · ADV COSTS A HEX · ONE FIGHT PER FACE · REAR 3 EDGES DOUBLE HITS
+            </span>
           </div>
         </div>
 
@@ -313,14 +347,14 @@ function TacticalConsole() {
           liveTick={playing ? liveTick : null}
           armedCount={armedCount}
           playerCount={playerUnits.length}
-          nextUnorderedId={nextUnorderedFrom(selectedId)}
+          nextUnorderedId={nextUnreadyFrom(selectedId)}
           onSelect={select}
           onFocus={(next) => {
             setSelectedId(next.unitId)
             setFocus(next)
           }}
           onCycle={cycle}
-          onAdd={addOrder}
+          onOrder={order}
           onClearSlot={clearSlot}
           onClearUnit={clearUnit}
         />
@@ -328,11 +362,11 @@ function TacticalConsole() {
 
       <div className="tc-foot">
         <div className="tc-foot-info">
-          <span className="tc-k">Movement points</span>
+          <span className="tc-k">Orders</span>
           <span className="tc-v">
             {playing
               ? `RESOLVING TICK ${(liveTick ?? 0) + 1} OF ${TICKS_PER_ROUND}`
-              : `${playerAssigned}/${playerTotal} ASSIGNED · ${
+              : `${decided}/${playerUnits.length * TICKS_PER_ROUND} TICKS SET · ${
                   ready
                     ? 'ALL UNITS ARMED'
                     : `${playerUnits.length - armedCount} UNIT${

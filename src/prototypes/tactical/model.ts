@@ -1,7 +1,8 @@
 /**
- * Scenario + order model for the "dense tactical console" prototype.
+ * Scenario + order model for the tactical console.
  *
- * Deliberately small and self-contained: this is a UI prototype, not an engine.
+ * The rules are adapted from the Ancient Wargames Rules in Neil Thomas,
+ * *One-Hour Wargames*, ch. 3 — see `docs/` for the spec this implements.
  * Everything hex-related leans on the shared helpers in `src/engine`.
  */
 import {
@@ -16,31 +17,67 @@ export const TICKS_PER_ROUND = 3
 export const BOARD_COLUMNS = 7
 export const BOARD_ROWS = 7
 
+/** A unit is removed from play once it has acquired this many hits. */
+export const HITS_TO_ELIMINATE = 15
+
 export type Side = 'player' | 'enemy'
 
-export type OrderKind = 'move' | 'left' | 'right' | 'hold'
+// ── unit types ────────────────────────────────────────────
 
-export const ORDER_KINDS: readonly OrderKind[] = ['move', 'left', 'right', 'hold']
+export type UnitType = 'infantry' | 'archers' | 'skirmishers' | 'cavalry'
 
-export interface OrderMeta {
+export const UNIT_TYPES: readonly UnitType[] = [
+  'infantry',
+  'archers',
+  'skirmishers',
+  'cavalry',
+]
+
+export interface UnitProfile {
   /** Three-character console code. */
   code: string
-  glyph: string
   label: string
-}
-
-export const ORDER_META: Record<OrderKind, OrderMeta> = {
-  move: { code: 'ADV', glyph: '▲', label: 'ADVANCE' },
-  left: { code: 'L60', glyph: '↰', label: 'WHEEL L' },
-  right: { code: 'R60', glyph: '↱', label: 'WHEEL R' },
-  hold: { code: 'HLD', glyph: '■', label: 'HOLD' },
-}
-
-export interface UnitStats {
-  attack: number
-  defense: number
-  hp: number
+  /** Added to the d6 when this type inflicts hits in melee. */
+  meleeModifier: number
+  /** Hexes this type may advance in a round. */
   movement: number
+  /** Armoured targets acquire half the hits mandated against them. */
+  armoured: boolean
+}
+
+/**
+ * The book's four types. Movement converts its inches at 3" per hex: Infantry
+ * and Archers 6", Skirmishers 9", Cavalry 12".
+ */
+export const UNIT_PROFILES: Record<UnitType, UnitProfile> = {
+  infantry: {
+    code: 'INF',
+    label: 'INFANTRY',
+    meleeModifier: 2,
+    movement: 2,
+    armoured: true,
+  },
+  archers: {
+    code: 'ARC',
+    label: 'ARCHERS',
+    meleeModifier: 0,
+    movement: 2,
+    armoured: false,
+  },
+  skirmishers: {
+    code: 'SKM',
+    label: 'SKIRMISHERS',
+    meleeModifier: -2,
+    movement: 3,
+    armoured: false,
+  },
+  cavalry: {
+    code: 'CAV',
+    label: 'CAVALRY',
+    meleeModifier: 0,
+    movement: 4,
+    armoured: false,
+  },
 }
 
 export interface UnitState {
@@ -50,20 +87,94 @@ export interface UnitState {
   /** Short console callsign, <= 6 chars. */
   tag: string
   side: Side
-  models: number
-  startModels: number
+  type: UnitType
+  /** Hits acquired so far. At `HITS_TO_ELIMINATE` the unit is gone. */
+  hits: number
   pos: Hex
   facing: HexDirection
   /** Continuous screen-space rotation, so wheels animate the short way round. */
   angle: number
-  stats: UnitStats
 }
 
-export type OrderSlots = (OrderKind | null)[]
+export function profileOf(unit: UnitState): UnitProfile {
+  return UNIT_PROFILES[unit.type]
+}
 
-export const PIKEMEN: UnitStats = { attack: 10, defense: 8, hp: 5, movement: 3 }
+export function isAlive(unit: UnitState): boolean {
+  return unit.hits < HITS_TO_ELIMINATE
+}
 
-/** Rectangular board, row by row from the top left (matches `ui/components/HexGrid`). */
+/** Hexes this unit may still advance, given what its queue already spends. */
+export function movementOf(unit: UnitState): number {
+  return profileOf(unit).movement
+}
+
+// ── orders ────────────────────────────────────────────────
+
+export type Wheel = 'left' | 'right'
+
+/**
+ * One tick's order: a free 60° wheel, then any number of advances the unit can
+ * still pay for. `null` in a queue means the tick has not been decided yet.
+ */
+export interface TickOrder {
+  wheel: Wheel | null
+  advances: number
+}
+
+export type OrderSlots = (TickOrder | null)[]
+
+/** The most advances one unit may pack into a single tick. */
+export const MAX_ADVANCES_PER_TICK = 2
+
+export function tickOrder(wheel: Wheel | null, advances: number): TickOrder {
+  return { wheel, advances }
+}
+
+export const HOLD: TickOrder = { wheel: null, advances: 0 }
+
+export function emptySlots(): OrderSlots {
+  return Array.from({ length: TICKS_PER_ROUND }, () => null)
+}
+
+/** Advances spent across a whole queue — wheels are free, so they do not count. */
+export function spentAdvances(slots: OrderSlots): number {
+  return slots.reduce((sum, slot) => sum + (slot?.advances ?? 0), 0)
+}
+
+/** Ticks the player has actually decided, filled or not. */
+export function decidedTicks(slots: OrderSlots): number {
+  return slots.filter((slot) => slot !== null).length
+}
+
+/** A queue is ready once every tick has been decided. */
+export function isReady(slots: OrderSlots): boolean {
+  return decidedTicks(slots) >= TICKS_PER_ROUND
+}
+
+/** Planning state of one unit's queue — drives the matrix and the board rings. */
+export type QueueState = 'empty' | 'part' | 'armed'
+
+export function queueState(slots: OrderSlots): QueueState {
+  const decided = decidedTicks(slots)
+  if (decided === 0) return 'empty'
+  return decided >= TICKS_PER_ROUND ? 'armed' : 'part'
+}
+
+/** Compact console rendering of a tick's order, e.g. `↰ADV` or `ADV×2`. */
+export function orderCode(order: TickOrder | null): string {
+  if (!order) return '···'
+  const wheel = order.wheel === 'left' ? 'L60' : order.wheel === 'right' ? 'R60' : ''
+  if (order.advances === 0) return wheel || 'HLD'
+  const advance = order.advances > 1 ? `ADV×${order.advances}` : 'ADV'
+  return wheel ? `${wheel}·${advance}` : advance
+}
+
+export const WHEEL_GLYPH: Record<Wheel, string> = { left: '↰', right: '↱' }
+
+// ── hex geometry ──────────────────────────────────────────
+
+/** Rectangular board, row by row from the top left. */
 export function boardTiles(columns = BOARD_COLUMNS, rows = BOARD_ROWS): Hex[] {
   const tiles: Hex[] = []
   for (let row = 0; row < rows; row += 1) {
@@ -85,7 +196,7 @@ export function facingAngle(direction: HexDirection): number {
 }
 
 /** `HEX_DIRECTIONS` runs counter-clockwise, so a left wheel steps forward in it. */
-export function wheel(direction: HexDirection, towards: 'left' | 'right'): HexDirection {
+export function wheel(direction: HexDirection, towards: Wheel): HexDirection {
   const index = HEX_DIRECTIONS.indexOf(direction)
   const step = towards === 'left' ? 1 : HEX_DIRECTIONS.length - 1
   return HEX_DIRECTIONS[(index + step) % HEX_DIRECTIONS.length]
@@ -102,8 +213,8 @@ export function edgeBetween(from: Hex, to: Hex): HexDirection | null {
   return null
 }
 
-/** Facing edge + its two neighbours are front; the other three are flank. */
-export function isFlankAttack(defender: UnitState, attackerPos: Hex): boolean {
+/** Facing edge + its two neighbours are front; the other three are rear. */
+export function isRearAttack(defender: UnitState, attackerPos: Hex): boolean {
   const edge = edgeBetween(defender.pos, attackerPos)
   if (!edge) return false
   const count = HEX_DIRECTIONS.length
@@ -113,29 +224,31 @@ export function isFlankAttack(defender: UnitState, attackerPos: Hex): boolean {
   return spread > 1
 }
 
+// ── the scenario ──────────────────────────────────────────
+
 /**
- * The fixed scenario: three pikemen blocks a side.
- *
- * Both lines are staggered — wings forward, centre refused — and sit mirrored
- * through the board's centre hex, so a straight three-tick advance puts the two
- * wings into contact on the same tick while the centre is left a wheel short.
+ * The fixed scenario: one of each type a side, lines mirrored through the
+ * board's centre hex so the wings meet before the centre does.
  */
 interface RosterEntry {
   tag: string
   name: string
+  type: UnitType
   pos: Hex
 }
 
 const PLAYER_START: RosterEntry[] = [
-  { tag: 'PK-01', name: '1st Pike, Aubin Levy', pos: hex(-1, 5) },
-  { tag: 'PK-02', name: '2nd Pike, Marsan', pos: hex(0, 6) },
-  { tag: 'PK-03', name: '3rd Pike, Guiscard', pos: hex(2, 5) },
+  { tag: 'INF-01', name: '1st Foot, Aubin Levy', type: 'infantry', pos: hex(0, 6) },
+  { tag: 'ARC-02', name: 'Levy Bowmen, Marsan', type: 'archers', pos: hex(-1, 5) },
+  { tag: 'SKM-03', name: 'Guiscard Skirmishers', type: 'skirmishers', pos: hex(2, 5) },
+  { tag: 'CAV-04', name: 'Aubin Horse', type: 'cavalry', pos: hex(1, 6) },
 ]
 
 const ENEMY_START: RosterEntry[] = [
-  { tag: 'BR-07', name: 'Brabant Pikes VII', pos: hex(5, 1) },
-  { tag: 'BR-08', name: 'Brabant Pikes VIII', pos: hex(4, 0) },
-  { tag: 'BR-09', name: 'Brabant Pikes IX', pos: hex(2, 1) },
+  { tag: 'BRB-11', name: 'Brabant Foot XI', type: 'infantry', pos: hex(4, 0) },
+  { tag: 'BRB-12', name: 'Brabant Bowmen XII', type: 'archers', pos: hex(5, 1) },
+  { tag: 'BRB-13', name: 'Brabant Skirmishers XIII', type: 'skirmishers', pos: hex(2, 1) },
+  { tag: 'BRB-14', name: 'Brabant Horse XIV', type: 'cavalry', pos: hex(3, 0) },
 ]
 
 function buildSide(
@@ -148,12 +261,11 @@ function buildSide(
     name: entry.name,
     tag: entry.tag,
     side,
-    models: 20,
-    startModels: 20,
+    type: entry.type,
+    hits: 0,
     pos: entry.pos,
     facing,
     angle: facingAngle(facing),
-    stats: PIKEMEN,
   }))
 }
 
@@ -162,21 +274,4 @@ export function initialUnits(): UnitState[] {
     ...buildSide('player', 'NE', PLAYER_START),
     ...buildSide('enemy', 'SW', ENEMY_START),
   ]
-}
-
-export function emptySlots(): OrderSlots {
-  return Array.from({ length: TICKS_PER_ROUND }, () => null)
-}
-
-export function assignedPoints(slots: OrderSlots): number {
-  return slots.filter((slot) => slot !== null).length
-}
-
-/** Planning state of one unit's queue — drives the matrix and the board rings. */
-export type QueueState = 'empty' | 'part' | 'armed'
-
-export function queueState(slots: OrderSlots, points: number): QueueState {
-  const spent = assignedPoints(slots)
-  if (spent === 0) return 'empty'
-  return spent >= points ? 'armed' : 'part'
 }
