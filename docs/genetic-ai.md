@@ -83,9 +83,21 @@ by collapsing anything deeper into a leaf it contained.
 ```
 $ npm run evolve -- --pop 24 --gens 40 --games 2
 gen  best    mean    worst   rounds  nodes   bias     close-on-nearest  hold-fast
-0    0.702   0.500   0.412   26.9    39.0    -0.001   0.458  0.500
-...
+0    0.710   0.500   0.408   27.0    40.8    -0.004   0.354  0.500
+10   0.587   0.500   0.366   22.4    24.1    -0.026   0.563  0.500
+20   0.541   0.500   0.428   22.1    28.8    0.008    0.813  0.500
+30   0.584   0.500   0.395   18.8    24.5    0.009    0.750  0.500
+40   0.602   0.500   0.357   18.3    23.5    -0.064   0.813  0.604
+
+champion g40-8 — 37 nodes, 143.6s
+  vs close-on-nearest   32W 5D 3L — win rate 0.863, differential 0.184
+  vs hold-fast          6W 34D 0L — win rate 0.575, differential 0.087
 ```
+
+That run is the shape to expect: the charge baseline is beaten decisively by
+generation 20, the static line holds the evolved army to draws for thirty
+generations, and only late on does the champion start taking games off it without
+ever losing one. Forty generations of 24 genomes is about two and a half minutes.
 
 **The mean score is pinned at 0.500 and always will be** — every game hands out
 exactly one point between its two sides, so the mean is an invariant of the round
