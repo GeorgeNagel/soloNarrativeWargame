@@ -3,33 +3,34 @@ import type { CSSProperties } from 'react'
 import { C } from './theme'
 import {
   HITS_TO_ELIMINATE,
-  TICKS_PER_ROUND,
+  MAX_TURNS_PER_PHASE,
+  ORDER_PHASES,
   WHEEL_GLYPH,
   canShoot,
-  decidedTicks,
-  orderCode,
+  phaseCode,
   profileOf,
   queueState,
-  spentAdvances,
+  turnWheel,
+  turnsIn,
 } from './model'
-import type { OrderSlots, UnitState } from './model'
+import type { OrderBook, OrderPhase, RoundOrder, UnitState } from './model'
 
-/** What the order pad can do to the focused tick. */
+/** What the order pad can do to the focused phase. */
 export type PadAction = 'left' | 'right' | 'advance' | 'hold'
 
 const PAD_META: Record<PadAction, { glyph: string; code: string; label: string }> = {
-  left: { glyph: WHEEL_GLYPH.left, code: 'L60', label: 'WHEEL LEFT — FREE' },
-  advance: { glyph: '▲', code: 'ADV', label: 'ADVANCE ONE HEX' },
-  right: { glyph: WHEEL_GLYPH.right, code: 'R60', label: 'WHEEL RIGHT — FREE' },
-  hold: { glyph: '■', code: 'HLD', label: 'STAND FAST' },
+  left: { glyph: WHEEL_GLYPH.left, code: 'L60', label: 'TURN LEFT ONE EDGE — FREE' },
+  advance: { glyph: '▲', code: 'ADV', label: 'ADVANCE ONE HEX, STRAIGHT AHEAD' },
+  right: { glyph: WHEEL_GLYPH.right, code: 'R60', label: 'TURN RIGHT ONE EDGE — FREE' },
+  hold: { glyph: '■', code: 'HLD', label: 'STAND FAST — NO TURNS, NO GROUND' },
 }
 
 export interface SlotFocus {
   unitId: string
-  tick: number
+  phase: OrderPhase
 }
 
-/** One line of the resolving-tick log. */
+/** One line of the resolving-round log. */
 export interface LogRow {
   k: string
   v: string
@@ -39,11 +40,12 @@ export interface LogRow {
 export interface ConsoleProps {
   units: UnitState[]
   log: LogRow[]
-  slots: Record<string, OrderSlots>
+  orders: OrderBook
   selectedId: string | null
   focus: SlotFocus | null
   playing: boolean
-  liveTick: number | null
+  /** The part of the order the resolution is working through, if any. */
+  livePhase: OrderPhase | null
   armedCount: number
   playerCount: number
   nextUnorderedId: string | null
@@ -51,39 +53,58 @@ export interface ConsoleProps {
   onFocus: (focus: SlotFocus) => void
   onCycle: (delta: number) => void
   onOrder: (action: PadAction) => void
-  onClearSlot: (unitId: string, tick: number) => void
+  onClearPhase: (unitId: string, phase: OrderPhase) => void
   onClearUnit: (unitId: string) => void
 }
 
-const TICK_LABELS = ['T1', 'T2', 'T3']
+/** A round reads left to right: turns, the straight advance, then turns again. */
+const PHASE_LABELS: Record<OrderPhase, string> = {
+  before: 'TURN',
+  advance: 'ADVANCE',
+  after: 'TURN',
+}
 
-/** The pad reads like the board: wheels either side of the advance, hold below. */
+/** The matrix has less room than the card does. */
+const PHASE_SHORT: Record<OrderPhase, string> = {
+  before: 'TURN',
+  advance: 'ADV',
+  after: 'TURN',
+}
+
+/** The pad reads like the board: turns either side of the advance, hold below. */
 const PAD_ROW: PadAction[] = ['left', 'advance', 'right']
 
 function accentOf(unit: UnitState): string {
   return unit.side === 'player' ? C.plr : C.enm
 }
 
+/** Phases already resolved, so the console can grey them out during playback. */
+function isPast(phase: OrderPhase, livePhase: OrderPhase | null): boolean {
+  if (!livePhase) return false
+  return ORDER_PHASES.indexOf(phase) < ORDER_PHASES.indexOf(livePhase)
+}
+
 /**
- * The matrix is the friendly roster: three units, three ticks each, always on
- * screen. It is also the only selector you need — a cell takes control of that
- * unit and points the pad at that tick, so you never lose your place.
+ * The matrix is the friendly roster: four units, three parts of an order each,
+ * always on screen. It is also the only selector you need — a cell takes
+ * control of that unit and points the pad at that part of its order, so you
+ * never lose your place.
  */
 function PlanGrid({
   units,
-  slots,
+  orders,
   selectedId,
   focus,
-  liveTick,
+  livePhase,
   playing,
   onSelect,
   onFocus,
 }: {
   units: UnitState[]
-  slots: Record<string, OrderSlots>
+  orders: OrderBook
   selectedId: string | null
   focus: SlotFocus | null
-  liveTick: number | null
+  livePhase: OrderPhase | null
   playing: boolean
   onSelect: (id: string) => void
   onFocus: (focus: SlotFocus) => void
@@ -91,10 +112,9 @@ function PlanGrid({
   const rows = units
     .filter((unit) => unit.side === 'player')
     .map((unit) => {
-      const queue = slots[unit.id] ?? []
-      const spent = spentAdvances(queue)
+      const order = orders[unit.id] ?? null
       const total = profileOf(unit).movement
-      const state = queueState(queue)
+      const state = queueState(order)
       const accent = accentOf(unit)
       return (
         <div
@@ -111,37 +131,35 @@ function PlanGrid({
             <span className={`tc-dot ${state}`} />
             {unit.tag}
           </button>
-          {Array.from({ length: TICKS_PER_ROUND }, (_, tick) => {
-            const order = queue[tick] ?? null
-            const live = playing && tick === liveTick
-            const isFocus =
-              !playing && focus?.unitId === unit.id && focus.tick === tick
+          {ORDER_PHASES.map((phase) => {
+            const live = playing && phase === livePhase
+            const isFocus = !playing && focus?.unitId === unit.id && focus.phase === phase
             const classes = [
               'tc-cell',
               order ? 'filled' : 'none',
               isFocus ? 'focus' : '',
               live ? 'live' : '',
-              playing && liveTick !== null && tick < liveTick ? 'past' : '',
+              playing && isPast(phase, livePhase) ? 'past' : '',
             ]
               .filter(Boolean)
               .join(' ')
             return (
               <button
-                key={tick}
+                key={phase}
                 type="button"
                 className={classes}
                 disabled={playing}
-                onClick={() => onFocus({ unitId: unit.id, tick })}
-                aria-label={`${unit.tag} tick ${tick + 1}${
-                  order ? ` ${orderCode(order)}` : ' undecided'
+                onClick={() => onFocus({ unitId: unit.id, phase })}
+                aria-label={`${unit.tag} ${PHASE_LABELS[phase]}${
+                  order ? ` ${phaseCode(order, phase)}` : ' unordered'
                 }`}
               >
-                {orderCode(order)}
+                {phaseCode(order, phase)}
               </button>
             )
           })}
           <span className={`tc-mcount ${state}`}>
-            {spent}/{total}
+            {order ? order.advance : 0}/{total}
           </span>
         </div>
       )
@@ -151,9 +169,13 @@ function PlanGrid({
     <div className="tc-plan">
       <div className="tc-mrow head">
         <span className="tc-mtag">UNIT</span>
-        {TICK_LABELS.map((t, i) => (
-          <span key={t} className="tc-cell" style={i === liveTick ? { color: C.warn } : undefined}>
-            {t}
+        {ORDER_PHASES.map((phase) => (
+          <span
+            key={phase}
+            className="tc-cell"
+            style={phase === livePhase ? { color: C.warn } : undefined}
+          >
+            {PHASE_SHORT[phase]}
           </span>
         ))}
         <span className="tc-mcount">HEX</span>
@@ -165,40 +187,42 @@ function PlanGrid({
 
 function UnitCard({
   unit,
-  queue,
+  order,
   focus,
   playing,
-  liveTick,
+  livePhase,
   nextUnorderedId,
   onFocus,
   onCycle,
   onOrder,
-  onClearSlot,
+  onClearPhase,
   onClearUnit,
   onSelect,
 }: {
   unit: UnitState
-  queue: OrderSlots
+  order: RoundOrder | null
   focus: SlotFocus | null
   playing: boolean
-  liveTick: number | null
+  livePhase: OrderPhase | null
   nextUnorderedId: string | null
   onFocus: (focus: SlotFocus) => void
   onCycle: (delta: number) => void
   onOrder: (action: PadAction) => void
-  onClearSlot: (unitId: string, tick: number) => void
+  onClearPhase: (unitId: string, phase: OrderPhase) => void
   onClearUnit: (unitId: string) => void
   onSelect: (id: string) => void
 }) {
   const accent = accentOf(unit)
   const ai = unit.side === 'enemy'
   const profile = profileOf(unit)
-  const spent = spentAdvances(queue)
+  const spent = order?.advance ?? 0
   const total = profile.movement
-  const decided = decidedTicks(queue)
-  const armed = decided >= TICKS_PER_ROUND
+  const armed = order != null
   const style = { '--accent': accent } as CSSProperties
   const jumpId = nextUnorderedId && nextUnorderedId !== unit.id ? nextUnorderedId : null
+  const focused = !ai && !playing && focus?.unitId === unit.id ? focus.phase : null
+  const turning = focused === 'before' || focused === 'after'
+  const turnsHere = order && turning ? Math.abs(turnsIn(order, focused)) : 0
 
   return (
     <div className="tc-card sel" style={style}>
@@ -215,7 +239,7 @@ function UnitCard({
         <span className="tc-tag">{unit.tag}</span>
         <span className="tc-name">{unit.name}</span>
         <span className={`tc-chip ${ai ? 'auto' : armed ? 'ok' : 'wait'}`}>
-          {ai ? 'AI AUTO' : armed ? 'ARMED' : `${TICKS_PER_ROUND - decided} TICKS OPEN`}
+          {ai ? 'AI AUTO' : armed ? 'ARMED' : 'NO ORDER'}
         </span>
         <button
           type="button"
@@ -275,14 +299,15 @@ function UnitCard({
       </div>
 
       <div className="tc-slots">
-        {Array.from({ length: TICKS_PER_ROUND }, (_, tick) => {
-          const order = queue[tick] ?? null
-          const isFocus = !ai && !playing && focus?.unitId === unit.id && focus.tick === tick
-          const live = playing && liveTick === tick
-          const past = playing && liveTick !== null && tick < liveTick
+        {ORDER_PHASES.map((phase) => {
+          const written = order != null
+          const isFocus = focused === phase
+          const live = playing && livePhase === phase
+          const past = playing && isPast(phase, livePhase)
+          const wheelGlyph = order ? turnWheel(turnsIn(order, phase)) : null
           const classes = [
             'tc-slot',
-            order ? 'filled' : '',
+            written ? 'filled' : '',
             isFocus ? 'focus' : '',
             live ? 'live' : '',
             past ? 'past' : '',
@@ -291,34 +316,34 @@ function UnitCard({
             .join(' ')
           return (
             <button
-              key={tick}
+              key={phase}
               type="button"
               className={classes}
               disabled={ai || playing}
-              onClick={() => onFocus({ unitId: unit.id, tick })}
-              aria-label={`${unit.tag} tick ${tick + 1}`}
+              onClick={() => onFocus({ unitId: unit.id, phase })}
+              aria-label={`${unit.tag} ${PHASE_LABELS[phase]}`}
             >
-              <span className="tc-slot-k">{TICK_LABELS[tick]}</span>
-              <span className={`tc-slot-v${order ? '' : ' empty'}`}>
-                {order ? (
+              <span className="tc-slot-k">{PHASE_LABELS[phase]}</span>
+              <span className={`tc-slot-v${written ? '' : ' empty'}`}>
+                {written ? (
                   <>
-                    {order.wheel && (
-                      <span style={{ color: accent }}>{WHEEL_GLYPH[order.wheel]}</span>
+                    {wheelGlyph && (
+                      <span style={{ color: accent }}>{WHEEL_GLYPH[wheelGlyph]}</span>
                     )}
-                    {orderCode(order)}
+                    {phaseCode(order, phase)}
                   </>
                 ) : (
                   '— — —'
                 )}
               </span>
-              {order && !ai && !playing && (
+              {written && !ai && !playing && (
                 <span
                   className="tc-x"
                   role="button"
-                  aria-label={`clear ${unit.tag} tick ${tick + 1}`}
+                  aria-label={`clear ${unit.tag} ${PHASE_LABELS[phase]}`}
                   onClick={(event) => {
                     event.stopPropagation()
-                    onClearSlot(unit.id, tick)
+                    onClearPhase(unit.id, phase)
                   }}
                 >
                   ×
@@ -334,8 +359,11 @@ function UnitCard({
           <div className="tc-pad">
             {[...PAD_ROW, 'hold' as PadAction].map((action) => {
               const meta = PAD_META[action]
-              // advances are the only thing that costs; wheels are free
-              const exhausted = action === 'advance' && spent >= total
+              // a turn phase takes three wheels; the advance takes the allowance
+              const exhausted =
+                action === 'advance'
+                  ? spent >= total
+                  : turning && turnsHere >= MAX_TURNS_PER_PHASE
               return (
                 <button
                   key={action}
@@ -355,7 +383,7 @@ function UnitCard({
             <button
               type="button"
               className="tc-mini"
-              disabled={playing || decided === 0}
+              disabled={playing || !armed}
               onClick={() => onClearUnit(unit.id)}
             >
               WIPE
@@ -373,9 +401,9 @@ function UnitCard({
             <span className="tc-hint">
               {playing
                 ? 'LOCKED'
-                : focus && focus.unitId === unit.id
-                  ? `WRITING → ${TICK_LABELS[focus.tick]}`
-                  : 'TAP A TICK'}
+                : focused
+                  ? `WRITING → ${PHASE_LABELS[focused]}${focused === 'after' ? ' AFTER' : ''}`
+                  : 'TAP A PHASE'}
             </span>
           </div>
         </>
@@ -383,7 +411,7 @@ function UnitCard({
       {ai && (
         <div className="tc-cardfoot">
           <span className="tc-hint" style={{ textAlign: 'left' }}>
-            OPFOR DOCTRINE · STAND FAST · ALL TICKS HLD
+            OPFOR DOCTRINE · STAND FAST · NO TURNS, NO GROUND
           </span>
         </div>
       )}
@@ -394,11 +422,11 @@ function UnitCard({
 function OrdersConsole({
   units,
   log,
-  slots,
+  orders,
   selectedId,
   focus,
   playing,
-  liveTick,
+  livePhase,
   armedCount,
   playerCount,
   nextUnorderedId,
@@ -406,7 +434,7 @@ function OrdersConsole({
   onFocus,
   onCycle,
   onOrder,
-  onClearSlot,
+  onClearPhase,
   onClearUnit,
 }: ConsoleProps) {
   const selected = units.find((unit) => unit.id === selectedId) ?? null
@@ -429,10 +457,10 @@ function OrdersConsole({
         </div>
         <PlanGrid
           units={units}
-          slots={slots}
+          orders={orders}
           selectedId={selectedId}
           focus={focus}
-          liveTick={liveTick}
+          livePhase={livePhase}
           playing={playing}
           onSelect={onSelect}
           onFocus={onFocus}
@@ -441,12 +469,12 @@ function OrdersConsole({
         {playing && (
           <>
             <div className="tc-sect">
-              <span>Tick log</span>
-              <span>{`T${(liveTick ?? 0) + 1}`}</span>
+              <span>Round log</span>
+              <span>{livePhase ? PHASE_LABELS[livePhase] : 'FIGHT'}</span>
             </div>
             <div className="tc-read">
               {log.length === 0 ? (
-                <div className="tc-empty">NO CONTACT THIS TICK</div>
+                <div className="tc-empty">NO CONTACT THIS ROUND</div>
               ) : (
                 log.map((row, i) => (
                   <div
@@ -471,15 +499,15 @@ function OrdersConsole({
           {selected ? (
             <UnitCard
               unit={selected}
-              queue={slots[selected.id] ?? []}
+              order={orders[selected.id] ?? null}
               focus={focus}
               playing={playing}
-              liveTick={liveTick}
+              livePhase={livePhase}
               nextUnorderedId={nextUnorderedId}
               onFocus={onFocus}
               onCycle={onCycle}
               onOrder={onOrder}
-              onClearSlot={onClearSlot}
+              onClearPhase={onClearPhase}
               onClearUnit={onClearUnit}
               onSelect={onSelect}
             />
@@ -495,21 +523,23 @@ function OrdersConsole({
         </div>
         <div className="tc-legend tc-wide">
           {[
-            ['ADV', 'INTO THE FACED HEX · 1 HEX OF THE ALLOWANCE'],
-            ['L60 / R60', 'WHEEL ONE EDGE · FREE'],
+            ['ROUND', 'TURN, THEN A STRAIGHT ADVANCE, THEN TURN AGAIN'],
+            ['', 'NOTHING SHOOTS OR FIGHTS UNTIL ALL OF THAT HAS RESOLVED'],
+            ['TURN', `UP TO ${MAX_TURNS_PER_PHASE} EDGES EITHER SIDE OF THE ADVANCE · FREE`],
+            ['ADV', 'STRAIGHT AHEAD · UP TO THE TYPE ALLOWANCE'],
             ['HLD', 'STAND FAST · COSTS NOTHING'],
             ['SHOOT', 'ARC / SKM ONLY · 4 HEXES · 45° OF THE FACED EDGE'],
-            ['', 'NEEDS A TICK WITHOUT AN ADVANCE · WHEELING IS FREE'],
-            ['CONTACT', 'ADJACENT AT A TICK BOUNDARY · ONE FIGHT PER FACE'],
+            ['', 'A UNIT THAT ADVANCED CANNOT SHOOT · TURNING IS FREE'],
+            ['CONTACT', 'ADJACENT WHEN THE MOVING STOPS · ONE FIGHT PER FACE'],
             ['MELEE', 'BOTH SIDES ROLL d6 ± TYPE · HITS LAND TOGETHER'],
             ['ARMOUR', 'INFANTRY TAKE HALF · ROUNDED TO THE ATTACKER'],
             ['REAR', 'REAR 3 EDGES · HITS DOUBLED'],
-            ['LOCKED', 'ENGAGED UNITS CANNOT ADVANCE · MELEE ENDS IN A KILL'],
+            ['LOCKED', 'ENGAGED AS THE ROUND OPENS · NO ADVANCE, MELEE ENDS IN A KILL'],
             ['', 'A REAR-ONLY ATTACK MAY BE TURNED TO FACE · COSTS NOTHING'],
             ['GONE', `${HITS_TO_ELIMINATE} HITS ELIMINATES A UNIT`],
             ['BLOCKED', 'HEX HELD · ADV REFUSED, HEX SPENT'],
           ].map(([k, v]) => (
-            <div className="tc-legendrow" key={k}>
+            <div className="tc-legendrow" key={`${k}-${v}`}>
               <i>{k}</i>
               <span>{v}</span>
             </div>

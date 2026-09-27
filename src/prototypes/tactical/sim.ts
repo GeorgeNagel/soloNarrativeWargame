@@ -1,26 +1,27 @@
 /**
- * Round resolution: movement in lockstep sub-steps, then one mutual engagement
- * per contacted face at each tick boundary.
+ * Round resolution: every unit turns, advances in lockstep ticks and turns
+ * again, and only then does anything shoot or fight.
  *
  * Implements `docs/combat.md`, `docs/movement.md` and `docs/turn-structure.md`,
  * which adapt the Ancient Wargames Rules in Neil Thomas, *One-Hour Wargames*.
  */
-import { hexDistance, hexIsAdjacent, hexNeighbor } from '../../engine'
+import { hexDistance, hexEquals, hexIsAdjacent, hexNeighbor } from '../../engine'
 import type { Hex } from '../../engine'
 import {
   HITS_TO_ELIMINATE,
-  MAX_ADVANCES_PER_TICK,
-  TICKS_PER_ROUND,
   boardTiles,
   canShoot,
   canShootAt,
+  clampTurns,
   hexKey,
   isAlive,
   isRearAttack,
   profileOf,
+  turnWheel,
+  turnsIn,
   wheel,
 } from './model'
-import type { OrderSlots, TickOrder, UnitState } from './model'
+import type { OrderBook, OrderPhase, RoundOrder, UnitState } from './model'
 
 const LEGAL = new Set(boardTiles().map(hexKey))
 
@@ -80,7 +81,7 @@ export interface Engagement {
 }
 
 /**
- * Every engagement at this tick boundary: one per face where two enemy units
+ * Every engagement at the end of the round: one per face where two enemy units
  * touch. Pairs are keyed by id so a face is never fought twice.
  */
 export function engagementsAmong(units: UnitState[], roll: Roll): Engagement[] {
@@ -106,7 +107,7 @@ export function engagementsAmong(units: UnitState[], roll: Roll): Engagement[] {
 }
 
 /**
- * Total hits each unit acquires this tick, from shooting and melee alike.
+ * Total hits each unit acquires this round, from shooting and melee alike.
  *
  * Both land together and elimination is checked afterwards, which is the
  * book's own order: shooting, then hand-to-hand, then eliminating units.
@@ -183,9 +184,9 @@ export function shootingTarget(shooter: UnitState, units: UnitState[]): UnitStat
 }
 
 /**
- * Every shot taken at this tick boundary. A unit that advanced this tick may
- * not shoot — the book's *Moving and Shooting* rule. Wheeling is not moving,
- * so a unit may turn onto its target and still loose.
+ * Every shot loosed at the end of the round. A unit that advanced this round
+ * may not shoot — the book's *Moving and Shooting* rule. Wheeling is not
+ * moving, so a unit may turn onto its target and still loose.
  */
 export function shotsAmong(
   units: UnitState[],
@@ -213,14 +214,22 @@ function cloned(units: UnitState[]): UnitState[] {
   return units.map((unit) => ({ ...unit }))
 }
 
-/** The free 60° wheel at the head of a tick's order. */
-export function applyWheel(unit: UnitState, order: TickOrder | null): UnitState {
-  if (!order?.wheel) return unit
-  return {
-    ...unit,
-    facing: wheel(unit.facing, order.wheel),
-    angle: unit.angle + (order.wheel === 'left' ? -60 : 60),
+/**
+ * One of a round's two turn phases: up to three free 60° wheels, taken one
+ * after another so the token animates the whole sweep.
+ */
+export function applyTurns(unit: UnitState, turns: number): UnitState {
+  const towards = turnWheel(turns)
+  if (!towards) return unit
+  let next = unit
+  for (let step = 0; step < Math.abs(clampTurns(turns)); step += 1) {
+    next = {
+      ...next,
+      facing: wheel(next.facing, towards),
+      angle: next.angle + (towards === 'left' ? -60 : 60),
+    }
   }
+  return next
 }
 
 /** One advance into the faced hex. A refused advance still spends the allowance. */
@@ -239,7 +248,7 @@ function occupiedBy(unit: UnitState, units: UnitState[]): Set<string> {
   )
 }
 
-/** How melee pins a unit, judged on the board as a tick opens. */
+/** How melee pins a unit, judged on the board as the round opens. */
 export interface MeleeLock {
   /** Adjacent to at least one living enemy. */
   engaged: boolean
@@ -264,32 +273,44 @@ export function meleeLock(unit: UnitState, units: UnitState[]): MeleeLock {
   return { engaged, frontally }
 }
 
-export interface MoveResult {
+/** One tick of a round's movement: a turn phase, or one hex of the advance. */
+export interface MoveTick {
+  kind: 'turn' | 'advance'
+  /** Which part of the order this tick resolves. */
+  phase: OrderPhase
+  /** Hex of the advance this tick covers, 1-based. Zero on a turn tick. */
+  step: number
+  /** The board at the end of this tick. */
   units: UnitState[]
+  /** A turn phase nobody used: nothing moved, so playback can skip it. */
+  idle: boolean
+}
+
+export interface MovePlan {
+  /** Turn phase, then one tick per hex of the longest advance, then turn phase. */
+  ticks: MoveTick[]
+  /** The board the round's shooting and melee are judged on. */
+  moved: UnitState[]
   /** Advances refused because the destination hex was held or off-board. */
   blockedIds: string[]
   /** Units whose orders were refused because melee had hold of them. */
   lockedIds: string[]
-  /** Units that spent this tick moving, and so may not shoot. */
+  /** Units that gave up ground this round, and so may not shoot. */
   advancedIds: Set<string>
 }
 
 /**
- * One tick of movement: everyone wheels, then advances in lockstep sub-steps so
- * a unit is blocked by where its neighbours are *now*, not where they started.
+ * A whole round of movement: every unit takes its turns, then the advances run
+ * in lockstep ticks so a unit is blocked by where its neighbours are *now*, and
+ * then every unit takes its second set of turns. Nothing shoots or fights until
+ * all of that has resolved.
  *
- * `spent` carries each unit's used allowance across the ticks of a round and is
- * updated in place. A locked unit spends nothing — its order never happened —
- * while an advance refused for a held hex is still paid for.
+ * The melee lock is judged once, on the board as the round opens: a unit the
+ * enemy already has hold of does not advance, and one held frontally does not
+ * turn either. A refused order costs nothing — it never happened — while an
+ * advance refused for a held hex is still paid for.
  */
-function moveTick(
-  start: UnitState[],
-  orders: Record<string, OrderSlots>,
-  tick: number,
-  spent: Map<string, number>,
-): MoveResult {
-  // The lock is judged before anyone moves, so a tick resolves against the
-  // engagements that existed when it opened.
+export function moveRound(start: UnitState[], orders: OrderBook): MovePlan {
   const locks = new Map(start.map((unit) => [unit.id, meleeLock(unit, start)]))
   const blocked = new Set<string>()
   const locked = new Set<string>()
@@ -297,45 +318,68 @@ function moveTick(
   const budget = new Map<string, number>()
 
   for (const unit of start) {
-    if (!isAlive(unit)) continue
     const lock = locks.get(unit.id)!
-    const order = orders[unit.id]?.[tick] ?? null
-    const wanted = Math.min(order?.advances ?? 0, MAX_ADVANCES_PER_TICK)
-    const left = profileOf(unit).movement - (spent.get(unit.id) ?? 0)
-    const allowed = lock.engaged ? 0 : Math.max(0, Math.min(wanted, left))
+    const order = orders[unit.id] ?? null
+    if (!isAlive(unit) || !order) continue
+    const wanted = Math.max(0, order.advance)
+    const allowed = lock.engaged ? 0 : Math.min(wanted, profileOf(unit).movement)
     budget.set(unit.id, allowed)
-    if (lock.engaged && (wanted > 0 || (order?.wheel != null && lock.frontally))) {
-      locked.add(unit.id)
-    }
+    const turning = order.before !== 0 || order.after !== 0
+    if (lock.engaged && (wanted > 0 || (turning && lock.frontally))) locked.add(unit.id)
     if (allowed > 0) advanced.add(unit.id)
   }
 
-  let units = start.map((unit) => {
-    const lock = locks.get(unit.id)!
-    // held frontally: no turning at all. Held only from behind: turn to face it.
-    if (lock.engaged && lock.frontally) return unit
-    return applyWheel(unit, orders[unit.id]?.[tick] ?? null)
+  /** A held-frontally unit may not turn at all; a rear-only one may. */
+  const turnPhase = (units: UnitState[], phase: OrderPhase): UnitState[] =>
+    units.map((unit) => {
+      const lock = locks.get(unit.id)!
+      if (!isAlive(unit) || (lock.engaged && lock.frontally)) return unit
+      const order = orders[unit.id] ?? null
+      return order ? applyTurns(unit, turnsIn(order, phase)) : unit
+    })
+
+  /** Nothing turned, so the phase is dead air on the board. */
+  const nobodyTurned = (before: UnitState[], after: UnitState[]): boolean =>
+    after.every((unit, i) => unit.facing === before[i].facing)
+
+  const ticks: MoveTick[] = []
+  let units = turnPhase(start, 'before')
+  ticks.push({
+    kind: 'turn',
+    phase: 'before',
+    step: 0,
+    units,
+    idle: nobodyTurned(start, units),
   })
 
-  for (let step = 0; step < MAX_ADVANCES_PER_TICK; step += 1) {
+  const longest = Math.max(0, ...budget.values())
+  for (let step = 1; step <= longest; step += 1) {
     const next = [...units]
     for (let i = 0; i < next.length; i += 1) {
       const unit = next[i]
       if (!isAlive(unit)) continue
-      if ((budget.get(unit.id) ?? 0) <= step) continue
+      if ((budget.get(unit.id) ?? 0) < step) continue
       const moved = applyAdvance(unit, occupiedBy(unit, next))
       if (hexKey(moved.pos) === hexKey(unit.pos)) blocked.add(unit.id)
       next[i] = moved
     }
     units = next
+    ticks.push({ kind: 'advance', phase: 'advance', step, units, idle: false })
   }
 
-  for (const unit of start) {
-    spent.set(unit.id, (spent.get(unit.id) ?? 0) + (budget.get(unit.id) ?? 0))
-  }
+  const turned = turnPhase(units, 'after')
+  ticks.push({
+    kind: 'turn',
+    phase: 'after',
+    step: 0,
+    units: turned,
+    idle: nobodyTurned(units, turned),
+  })
+  units = turned
 
   return {
-    units,
+    ticks,
+    moved: units,
     blockedIds: [...blocked],
     lockedIds: [...locked],
     advancedIds: advanced,
@@ -344,121 +388,123 @@ function moveTick(
 
 // ── the round ─────────────────────────────────────────────
 
-export interface TickFrame {
-  tick: number
-  /** Post-move, pre-combat: what the board looks like mid-tick. */
+export interface RoundResult {
+  /** Movement, tick by tick, for the playback to walk through. */
+  ticks: MoveTick[]
+  /** Post-move, pre-combat: the board the fighting is judged on. */
   moved: UnitState[]
-  /** Post-combat: what the board looks like at the tick boundary. */
-  units: UnitState[]
-  /** Shots loosed at this tick boundary, resolved before the melee. */
+  /** Shots loosed once the movement is done, resolved before the melee. */
   shots: Shot[]
   engagements: Engagement[]
-  /** Units whose advance was refused this tick (board edge or an occupied hex). */
+  /** The board once shooting and melee have landed. */
+  units: UnitState[]
+  /** Units whose advance was refused (board edge or an occupied hex). */
   blockedIds: string[]
-  /** Units whose orders were refused this tick because melee had hold of them. */
+  /** Units whose orders were refused because melee had hold of them. */
   lockedIds: string[]
-  /** Units eliminated at this tick boundary. */
+  /** Units eliminated by this round's fighting. */
   eliminatedIds: string[]
 }
 
-/** Resolve a committed round into one frame per tick. */
+/**
+ * Resolve a committed round: all the movement first, then shooting, then melee.
+ *
+ * Hits from both land together and elimination is checked once, at the end of
+ * the round — which is the book's own order of shooting, hand-to-hand, then
+ * eliminating units, applied to the round as a whole.
+ */
 export function resolveRound(
   start: UnitState[],
-  orders: Record<string, OrderSlots>,
+  orders: OrderBook,
   roll: Roll = d6,
-): TickFrame[] {
-  const frames: TickFrame[] = []
-  let current = cloned(start)
-  const spent = new Map<string, number>()
+): RoundResult {
+  const plan = moveRound(cloned(start), orders)
+  const shots = shotsAmong(plan.moved, plan.advancedIds, roll)
+  const engagements = engagementsAmong(plan.moved, roll)
+  const taken = tallyHits(shots, engagements)
 
-  for (let tick = 0; tick < TICKS_PER_ROUND; tick += 1) {
-    const { units: moved, blockedIds, lockedIds, advancedIds } = moveTick(
-      current,
-      orders,
-      tick,
-      spent,
-    )
-    const shots = shotsAmong(moved, advancedIds, roll)
-    const engagements = engagementsAmong(moved, roll)
-    const taken = tallyHits(shots, engagements)
+  const units = plan.moved.map((unit) => ({
+    ...unit,
+    hits: Math.min(HITS_TO_ELIMINATE, unit.hits + (taken.get(unit.id) ?? 0)),
+  }))
 
-    const units = moved.map((unit) => ({
-      ...unit,
-      hits: Math.min(HITS_TO_ELIMINATE, unit.hits + (taken.get(unit.id) ?? 0)),
-    }))
-
-    frames.push({
-      tick,
-      moved,
-      units,
-      shots,
-      engagements,
-      blockedIds,
-      lockedIds,
-      eliminatedIds: units.filter((unit) => !isAlive(unit)).map((unit) => unit.id),
-    })
-    current = units
+  return {
+    ticks: plan.ticks,
+    moved: plan.moved,
+    shots,
+    engagements,
+    units,
+    blockedIds: plan.blockedIds,
+    lockedIds: plan.lockedIds,
+    eliminatedIds: units.filter((unit) => !isAlive(unit)).map((unit) => unit.id),
   }
-
-  return frames
 }
 
-/** The units that walk into the next round: the survivors of the last tick. */
-export function survivors(frames: TickFrame[]): UnitState[] {
-  const last = frames[frames.length - 1]
-  return last ? last.units.filter(isAlive) : []
+/** The units that walk into the next round: the survivors of this one. */
+export function survivors(result: RoundResult): UnitState[] {
+  return result.units.filter(isAlive)
 }
 
 // ── planning preview ──────────────────────────────────────
 
-export interface PreviewStep {
-  tick: number
+export interface Preview {
+  order: RoundOrder | null
+  /** Hexes the unit passes through, in order, not counting where it starts. */
+  path: Hex[]
+  /** Where the round leaves the unit, and which way it points there. */
   pos: Hex
   facing: UnitState['facing']
   angle: number
-  order: TickOrder | null
   /** Set when an advance could not be taken (edge of board / occupied). */
   blocked: boolean
   /** Set when melee held the unit and refused its order outright. */
   locked: boolean
+  /** Whether the unit gives up ground this round — a unit that does cannot shoot. */
+  advanced: boolean
 }
 
-export type PreviewMap = Record<string, PreviewStep[]>
+export type PreviewMap = Record<string, Preview>
+
+/** Movement ticks a plan is worth watching for: dead turn phases do not count. */
+export function plannedTicks(start: UnitState[], orders: OrderBook): number {
+  return moveRound(cloned(start), orders).ticks.filter((tick) => !tick.idle).length
+}
 
 /**
- * Dry-run of every queue-in-progress at once, for the board traces and ghosts.
+ * Dry-run of every order-in-progress at once, for the board traces and ghosts.
  *
  * Movement only — combat is rolled, so the preview cannot promise an outcome
- * and does not try to. Running every unit through the same lockstep loop as
+ * and does not try to. Running every unit through the same lockstep ticks as
  * `resolveRound` is what lets the preview show one unit shouldering another out
  * of a hex while you are still planning.
  */
-export function previewAll(
-  start: UnitState[],
-  orders: Record<string, OrderSlots>,
-): PreviewMap {
-  const steps: PreviewMap = {}
-  for (const unit of start) steps[unit.id] = []
-  let current = cloned(start)
-  const spent = new Map<string, number>()
+export function previewAll(start: UnitState[], orders: OrderBook): PreviewMap {
+  const plan = moveRound(cloned(start), orders)
+  const blocked = new Set(plan.blockedIds)
+  const locked = new Set(plan.lockedIds)
+  const previews: PreviewMap = {}
 
-  for (let tick = 0; tick < TICKS_PER_ROUND; tick += 1) {
-    const { units, blockedIds, lockedIds } = moveTick(current, orders, tick, spent)
-    const refused = new Set(blockedIds)
-    const held = new Set(lockedIds)
-    for (const unit of units) {
-      steps[unit.id].push({
-        tick,
-        pos: unit.pos,
-        facing: unit.facing,
-        angle: unit.angle,
-        order: orders[unit.id]?.[tick] ?? null,
-        blocked: refused.has(unit.id),
-        locked: held.has(unit.id),
-      })
+  for (const unit of start) {
+    const path: Hex[] = []
+    for (const tick of plan.ticks) {
+      if (tick.kind !== 'advance') continue
+      const at = tick.units.find((candidate) => candidate.id === unit.id)
+      if (!at) continue
+      const last = path[path.length - 1] ?? unit.pos
+      if (!hexEquals(at.pos, last)) path.push(at.pos)
     }
-    current = units
+    const end = plan.moved.find((candidate) => candidate.id === unit.id) ?? unit
+    previews[unit.id] = {
+      order: orders[unit.id] ?? null,
+      path,
+      pos: end.pos,
+      facing: end.facing,
+      angle: end.angle,
+      blocked: blocked.has(unit.id),
+      locked: locked.has(unit.id),
+      advanced: plan.advancedIds.has(unit.id),
+    }
   }
 
-  return steps
+  return previews
 }

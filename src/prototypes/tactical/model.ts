@@ -15,7 +15,6 @@ import {
 } from '../../engine'
 import type { Hex, HexDirection } from '../../engine'
 
-export const TICKS_PER_ROUND = 3
 export const BOARD_COLUMNS = 7
 export const BOARD_ROWS = 7
 
@@ -127,7 +126,7 @@ export function isAlive(unit: UnitState): boolean {
   return unit.hits < HITS_TO_ELIMINATE
 }
 
-/** Hexes this unit may still advance, given what its queue already spends. */
+/** Hexes this unit may advance in a round. */
 export function movementOf(unit: UnitState): number {
   return profileOf(unit).movement
 }
@@ -141,61 +140,88 @@ export function canShoot(unit: UnitState): boolean {
 
 export type Wheel = 'left' | 'right'
 
+/** The most 60° wheels a unit may pack into one of a round's turn phases. */
+export const MAX_TURNS_PER_PHASE = 3
+
 /**
- * One tick's order: a free 60° wheel, then any number of advances the unit can
- * still pay for. `null` in a queue means the tick has not been decided yet.
+ * One unit's order for a whole round: turns, then a straight advance, then
+ * turns again. A turn phase is a signed count of 60° wheels — negative to the
+ * left, positive to the right — and `advance` is hexes in a straight line,
+ * capped by the unit's type.
  */
-export interface TickOrder {
-  wheel: Wheel | null
-  advances: number
+export interface RoundOrder {
+  before: number
+  advance: number
+  after: number
 }
 
-export type OrderSlots = (TickOrder | null)[]
+/** Every unit's order for the round. `null` is a unit nobody has ordered yet. */
+export type OrderBook = Record<string, RoundOrder | null>
 
-/** The most advances one unit may pack into a single tick. */
-export const MAX_ADVANCES_PER_TICK = 2
+/** The three parts of an order, in the sequence they resolve. */
+export type OrderPhase = 'before' | 'advance' | 'after'
 
-export function tickOrder(wheel: Wheel | null, advances: number): TickOrder {
-  return { wheel, advances }
+export const ORDER_PHASES: readonly OrderPhase[] = ['before', 'advance', 'after']
+
+/** Stand fast: no turns either side, no ground given up. */
+export const HOLD: RoundOrder = { before: 0, advance: 0, after: 0 }
+
+export function roundOrder(before = 0, advance = 0, after = 0): RoundOrder {
+  return { before, advance, after }
 }
 
-export const HOLD: TickOrder = { wheel: null, advances: 0 }
-
-export function emptySlots(): OrderSlots {
-  return Array.from({ length: TICKS_PER_ROUND }, () => null)
+/** The wheel a signed turn count means, or null when the phase does not turn. */
+export function turnWheel(turns: number): Wheel | null {
+  if (turns === 0) return null
+  return turns < 0 ? 'left' : 'right'
 }
 
-/** Advances spent across a whole queue — wheels are free, so they do not count. */
-export function spentAdvances(slots: OrderSlots): number {
-  return slots.reduce((sum, slot) => sum + (slot?.advances ?? 0), 0)
+/** Hold a turn phase to the three 60° steps it allows, either way. */
+export function clampTurns(turns: number): number {
+  return Math.max(-MAX_TURNS_PER_PHASE, Math.min(MAX_TURNS_PER_PHASE, turns))
 }
 
-/** Ticks the player has actually decided, filled or not. */
-export function decidedTicks(slots: OrderSlots): number {
-  return slots.filter((slot) => slot !== null).length
+/** The signed turn count of one of an order's two turn phases. */
+export function turnsIn(order: RoundOrder, phase: OrderPhase): number {
+  if (phase === 'before') return order.before
+  if (phase === 'after') return order.after
+  return 0
 }
 
-/** A queue is ready once every tick has been decided. */
-export function isReady(slots: OrderSlots): boolean {
-  return decidedTicks(slots) >= TICKS_PER_ROUND
+/** A unit is ready once somebody has written its order for the round. */
+export function isReady(order: RoundOrder | null | undefined): boolean {
+  return order != null
 }
 
-/** Planning state of one unit's queue — drives the matrix and the board rings. */
-export type QueueState = 'empty' | 'part' | 'armed'
+/** Planning state of one unit's order — drives the matrix and the board rings. */
+export type QueueState = 'empty' | 'armed'
 
-export function queueState(slots: OrderSlots): QueueState {
-  const decided = decidedTicks(slots)
-  if (decided === 0) return 'empty'
-  return decided >= TICKS_PER_ROUND ? 'armed' : 'part'
+export function queueState(order: RoundOrder | null | undefined): QueueState {
+  return order ? 'armed' : 'empty'
 }
 
-/** Compact console rendering of a tick's order, e.g. `↰ADV` or `ADV×2`. */
-export function orderCode(order: TickOrder | null): string {
+/** Compact console rendering of one phase, e.g. `L60×2`, `ADV×3` or `HLD`. */
+export function phaseCode(
+  order: RoundOrder | null | undefined,
+  phase: OrderPhase,
+): string {
   if (!order) return '···'
-  const wheel = order.wheel === 'left' ? 'L60' : order.wheel === 'right' ? 'R60' : ''
-  if (order.advances === 0) return wheel || 'HLD'
-  const advance = order.advances > 1 ? `ADV×${order.advances}` : 'ADV'
-  return wheel ? `${wheel}·${advance}` : advance
+  if (phase === 'advance') {
+    if (order.advance === 0) return 'HLD'
+    return order.advance > 1 ? `ADV×${order.advance}` : 'ADV'
+  }
+  const turns = turnsIn(order, phase)
+  if (turns === 0) return '—'
+  const code = turns < 0 ? 'L60' : 'R60'
+  return Math.abs(turns) > 1 ? `${code}×${Math.abs(turns)}` : code
+}
+
+/** The whole order on one line, the way the tokens and the log read it. */
+export function orderCode(order: RoundOrder | null | undefined): string {
+  if (!order) return '···'
+  return ORDER_PHASES.map((phase) => phaseCode(order, phase))
+    .filter((code) => code !== '—')
+    .join('·')
 }
 
 export const WHEEL_GLYPH: Record<Wheel, string> = { left: '↰', right: '↱' }

@@ -4,21 +4,23 @@ import { hex } from '../../engine'
 import type { HexDirection } from '../../engine'
 import {
   HITS_TO_ELIMINATE,
-  TICKS_PER_ROUND,
+  HOLD,
   canShoot,
   canShootAt,
   facingAngle,
   inFieldOfFire,
   isRearAttack,
   orderCode,
-  tickOrder,
+  phaseCode,
+  roundOrder,
 } from './model'
-import type { OrderSlots, UnitState, UnitType } from './model'
+import type { OrderBook, UnitState, UnitType } from './model'
 import {
   assessBlow,
   assessShot,
   meleeLock,
   engagementsAmong,
+  plannedTicks,
   previewAll,
   resolveRound,
   shootingTarget,
@@ -54,8 +56,9 @@ function scripted(...results: number[]) {
   return () => results[Math.min(i++, results.length - 1)]
 }
 
-function queue(...orders: OrderSlots): OrderSlots {
-  return orders
+/** Everyone stands fast unless the test says otherwise. */
+function standFast(...units: UnitState[]): OrderBook {
+  return Object.fromEntries(units.map((unit) => [unit.id, HOLD]))
 }
 
 describe('assessBlow', () => {
@@ -162,132 +165,202 @@ describe('engagementsAmong', () => {
   })
 })
 
+
 describe('movement', () => {
-  const hold = tickOrder(null, 0)
-
-  it('advances into the faced hex and spends the allowance', () => {
-    const mover = unit('m', 'cavalry', 'player', 0, 3, 'E')
-    const steps = previewAll([mover], {
-      m: queue(tickOrder(null, 1), tickOrder(null, 1), hold),
-    })
-    expect(steps.m[0].pos).toEqual(hex(1, 3))
-    expect(steps.m[1].pos).toEqual(hex(2, 3))
-    expect(steps.m[2].pos).toEqual(hex(2, 3))
-  })
-
-  it('wheels for free, so a turn and an advance share one tick', () => {
-    const mover = unit('m', 'cavalry', 'player', 0, 3, 'E')
-    const steps = previewAll([mover], {
-      m: queue(tickOrder('left', 1), hold, hold),
-    })
-    expect(steps.m[0].facing).toBe('NE')
-    expect(steps.m[0].pos).toEqual(hex(1, 2))
-  })
-
-  it('lets cavalry spend four hexes across three ticks', () => {
+  it('advances in a straight line, up to the type allowance', () => {
     const horse = unit('h', 'cavalry', 'player', -1, 3, 'E')
-    const steps = previewAll([horse], {
-      h: queue(tickOrder(null, 2), tickOrder(null, 1), tickOrder(null, 1)),
-    })
-    expect(steps.h[2].pos).toEqual(hex(3, 3))
+    const { h } = previewAll([horse], { h: roundOrder(0, 4, 0) })
+    expect(h.path).toEqual([hex(0, 3), hex(1, 3), hex(2, 3), hex(3, 3)])
+    expect(h.pos).toEqual(hex(3, 3))
   })
 
-  it('caps advances at the unit type allowance', () => {
-    // infantry may move 2 hexes, so the third advance is refused
+  it('caps the advance at the type allowance', () => {
+    // infantry may move 2 hexes, so the third hex of the order is refused
     const foot = unit('f', 'infantry', 'player', 0, 3, 'E')
-    const steps = previewAll([foot], {
-      f: queue(tickOrder(null, 1), tickOrder(null, 1), tickOrder(null, 1)),
-    })
-    expect(steps.f[2].pos).toEqual(hex(2, 3))
+    const { f } = previewAll([foot], { f: roundOrder(0, 3, 0) })
+    expect(f.pos).toEqual(hex(2, 3))
+  })
+
+  it('turns before the advance, so the straight line follows the new facing', () => {
+    const mover = unit('m', 'cavalry', 'player', 0, 3, 'E')
+    const { m } = previewAll([mover], { m: roundOrder(-1, 2, 0) })
+    expect(m.facing).toBe('NE')
+    expect(m.path).toEqual([hex(1, 2), hex(2, 1)])
+  })
+
+  it('turns after the advance without giving up more ground', () => {
+    const mover = unit('m', 'cavalry', 'player', 0, 3, 'E')
+    const { m } = previewAll([mover], { m: roundOrder(0, 1, 2) })
+    expect(m.pos).toEqual(hex(1, 3))
+    // two right wheels from east: SE, then SW
+    expect(m.facing).toBe('SW')
+  })
+
+  it('wheels up to three edges in a phase, and no further', () => {
+    const mover = unit('m', 'cavalry', 'player', 0, 3, 'E')
+    const { m } = previewAll([mover], { m: roundOrder(-3, 0, 0) })
+    expect(m.facing).toBe('W')
+    const over = previewAll([mover], { m: roundOrder(-5, 0, 0) })
+    expect(over.m.facing).toBe('W')
+  })
+
+  it('turns both ways in one round, six edges in all', () => {
+    const mover = unit('m', 'cavalry', 'player', 0, 3, 'E')
+    const { m } = previewAll([mover], { m: roundOrder(3, 1, 3) })
+    expect(m.facing).toBe('E')
+    // three right wheels from east point it west, so the advance runs west
+    expect(m.pos).toEqual(hex(-1, 3))
   })
 
   it('refuses an advance into an occupied hex and marks it blocked', () => {
     const mover = unit('m', 'cavalry', 'player', 0, 3, 'E')
     const wall = unit('w', 'infantry', 'player', 1, 3, 'E')
-    const steps = previewAll([mover, wall], {
-      m: queue(tickOrder(null, 1), hold, hold),
-      w: queue(hold, hold, hold),
+    const previews = previewAll([mover, wall], {
+      m: roundOrder(0, 1, 0),
+      w: HOLD,
     })
-    expect(steps.m[0].pos).toEqual(hex(0, 3))
-    expect(steps.m[0].blocked).toBe(true)
+    expect(previews.m.pos).toEqual(hex(0, 3))
+    expect(previews.m.blocked).toBe(true)
   })
 
   it('refuses an advance off the edge of the board', () => {
     const edge = unit('e', 'cavalry', 'player', 3, 0, 'NE')
-    const steps = previewAll([edge], { e: queue(tickOrder(null, 1), hold, hold) })
-    expect(steps.e[0].blocked).toBe(true)
+    const { e } = previewAll([edge], { e: roundOrder(0, 1, 0) })
+    expect(e.blocked).toBe(true)
+  })
+
+  it('advances in lockstep, so a follower moves into a hex just vacated', () => {
+    const lead = unit('a', 'cavalry', 'player', 1, 3, 'E')
+    const follow = unit('b', 'cavalry', 'player', 0, 3, 'E')
+    const previews = previewAll([lead, follow], {
+      a: roundOrder(0, 1, 0),
+      b: roundOrder(0, 1, 0),
+    })
+    expect(previews.a.pos).toEqual(hex(2, 3))
+    expect(previews.b.pos).toEqual(hex(1, 3))
+    expect(previews.b.blocked).toBe(false)
+  })
+})
+
+describe('the ticks of a round', () => {
+  it('runs a turn phase, one tick per hex advanced, then a turn phase', () => {
+    const mover = unit('m', 'cavalry', 'player', 0, 3, 'E')
+    const result = resolveRound([mover], { m: roundOrder(-1, 2, 1) }, scripted(3))
+    expect(result.ticks.map((tick) => tick.kind)).toEqual([
+      'turn',
+      'advance',
+      'advance',
+      'turn',
+    ])
+    expect(result.ticks.map((tick) => tick.phase)).toEqual([
+      'before',
+      'advance',
+      'advance',
+      'after',
+    ])
+  })
+
+  it('marks a turn phase nobody used, so playback can skip it', () => {
+    const mover = unit('m', 'cavalry', 'player', 0, 3, 'E')
+    const result = resolveRound([mover], { m: roundOrder(0, 1, 2) }, scripted(3))
+    expect(result.ticks[0].idle).toBe(true)
+    expect(result.ticks[result.ticks.length - 1].idle).toBe(false)
+  })
+
+  it('counts the ticks a plan is worth watching', () => {
+    const mover = unit('m', 'cavalry', 'player', 0, 3, 'E')
+    // one turn phase used, two hexes advanced: three ticks with something in them
+    expect(plannedTicks([mover], { m: roundOrder(-1, 2, 0) })).toBe(3)
+    expect(plannedTicks([mover], { m: HOLD })).toBe(0)
   })
 })
 
 describe('resolveRound', () => {
-  const hold = tickOrder(null, 0)
-  const standFast = queue(hold, hold, hold)
-
-  it('returns one frame per tick', () => {
-    const frames = resolveRound(
-      [unit('a', 'cavalry', 'player', 0, 3), unit('b', 'cavalry', 'enemy', 4, 3)],
-      { a: standFast, b: standFast },
+  it('fights only once all the moving is done', () => {
+    const charger = unit('a', 'cavalry', 'player', 0, 3, 'E')
+    const target = unit('b', 'cavalry', 'enemy', 2, 3, 'W')
+    const result = resolveRound(
+      [charger, target],
+      { a: roundOrder(0, 1, 0), b: HOLD },
       scripted(3),
     )
-    expect(frames).toHaveLength(TICKS_PER_ROUND)
+    expect(result.engagements).toHaveLength(1)
+    expect(result.units.find((u) => u.id === 'b')?.hits).toBe(3)
   })
 
-  it('accumulates hits across the ticks of a round', () => {
+  it('does not fight a unit it merely passed on the way through', () => {
+    // the horse rides past the skirmishers at (2,2) and ends out of reach
+    const horse = unit('a', 'cavalry', 'player', 0, 3, 'E')
+    const passed = unit('b', 'skirmishers', 'enemy', 2, 2, 'SW')
+    const result = resolveRound(
+      [horse, passed],
+      { a: roundOrder(0, 4, 0), b: HOLD },
+      scripted(3),
+    )
+    expect(result.moved.find((u) => u.id === 'a')?.pos).toEqual(hex(4, 3))
+    expect(result.engagements).toHaveLength(0)
+    expect(result.units.find((u) => u.id === 'a')?.hits).toBe(0)
+  })
+
+  it('lands one engagement a round, not one a tick', () => {
     const a = unit('a', 'cavalry', 'player', 0, 3, 'E')
     const b = unit('b', 'cavalry', 'enemy', 1, 3, 'W')
-    const frames = resolveRound([a, b], { a: standFast, b: standFast }, scripted(3))
-    // adjacent from the start: 3 hits a tick, both ways, three ticks
-    expect(frames[0].units.find((u) => u.id === 'b')?.hits).toBe(3)
-    expect(frames[2].units.find((u) => u.id === 'b')?.hits).toBe(9)
+    const result = resolveRound([a, b], standFast(a, b), scripted(3))
+    expect(result.units.find((u) => u.id === 'b')?.hits).toBe(3)
+    expect(result.units.find((u) => u.id === 'a')?.hits).toBe(3)
   })
 
-  it('eliminates a unit at 15 hits and stops it fighting on', () => {
-    const a = unit('a', 'infantry', 'player', 0, 3, 'E')
+  it('accumulates hits from one round to the next', () => {
+    const a = unit('a', 'cavalry', 'player', 0, 3, 'E')
     const b = unit('b', 'cavalry', 'enemy', 1, 3, 'W')
-    // infantry rolling 6 lands 8 hits a tick: 8, then 16 -> capped and gone
-    const frames = resolveRound([a, b], { a: standFast, b: standFast }, scripted(6))
-    expect(frames[1].eliminatedIds).toContain('b')
-    expect(frames[1].units.find((u) => u.id === 'b')?.hits).toBe(HITS_TO_ELIMINATE)
-    expect(frames[2].engagements).toHaveLength(0)
-    expect(survivors(frames).map((u) => u.id)).toEqual(['a'])
+    const first = resolveRound([a, b], standFast(a, b), scripted(3))
+    const second = resolveRound(survivors(first), standFast(a, b), scripted(3))
+    expect(second.units.find((u) => u.id === 'b')?.hits).toBe(6)
   })
 
   it('carries hits taken in an earlier round into the next one', () => {
     const wounded = { ...unit('a', 'cavalry', 'player', 0, 3, 'E'), hits: 10 }
     const b = unit('b', 'cavalry', 'enemy', 1, 3, 'W')
-    const frames = resolveRound([wounded, b], { a: standFast, b: standFast }, scripted(3))
-    expect(frames[0].units.find((u) => u.id === 'a')?.hits).toBe(13)
+    const result = resolveRound([wounded, b], standFast(wounded, b), scripted(3))
+    expect(result.units.find((u) => u.id === 'a')?.hits).toBe(13)
   })
 
-  it('lets a unit eliminated this tick land its own blow first', () => {
+  it('eliminates a unit at 15 hits and leaves it out of the next round', () => {
+    const a = unit('a', 'infantry', 'player', 0, 3, 'E')
+    const b = { ...unit('b', 'cavalry', 'enemy', 1, 3, 'W'), hits: 8 }
+    // infantry rolling 6 lands 8 hits, which takes b past 15
+    const result = resolveRound([a, b], standFast(a, b), scripted(6))
+    expect(result.eliminatedIds).toContain('b')
+    expect(result.units.find((u) => u.id === 'b')?.hits).toBe(HITS_TO_ELIMINATE)
+    expect(survivors(result).map((u) => u.id)).toEqual(['a'])
+  })
+
+  it('lets a unit eliminated this round land its own blow first', () => {
     const a = unit('a', 'infantry', 'player', 0, 3, 'E')
     const b = { ...unit('b', 'cavalry', 'enemy', 1, 3, 'W'), hits: 14 }
-    const frames = resolveRound([a, b], { a: standFast, b: standFast }, scripted(6))
-    expect(frames[0].eliminatedIds).toContain('b')
+    const result = resolveRound([a, b], standFast(a, b), scripted(6))
+    expect(result.eliminatedIds).toContain('b')
     // b rolls 6 as it dies; a's armour halves that to 3, but it still lands
-    expect(frames[0].units.find((u) => u.id === 'a')?.hits).toBe(3)
-  })
-
-  it('fights only after the tick has moved everyone', () => {
-    const charger = unit('a', 'cavalry', 'player', 0, 3, 'E')
-    const target = unit('b', 'cavalry', 'enemy', 2, 3, 'W')
-    const frames = resolveRound(
-      [charger, target],
-      { a: queue(tickOrder(null, 1), hold, hold), b: standFast },
-      scripted(3),
-    )
-    expect(frames[0].engagements).toHaveLength(1)
+    expect(result.units.find((u) => u.id === 'a')?.hits).toBe(3)
   })
 })
 
-describe('orderCode', () => {
-  it('reads an undecided tick, a hold, a wheel and an advance', () => {
+describe('order codes', () => {
+  it('reads each phase of an order', () => {
+    const order = roundOrder(-2, 3, 1)
+    expect(phaseCode(order, 'before')).toBe('L60×2')
+    expect(phaseCode(order, 'advance')).toBe('ADV×3')
+    expect(phaseCode(order, 'after')).toBe('R60')
+    expect(phaseCode(HOLD, 'advance')).toBe('HLD')
+    expect(phaseCode(HOLD, 'before')).toBe('—')
+    expect(phaseCode(null, 'advance')).toBe('···')
+  })
+
+  it('reads a whole order on one line', () => {
     expect(orderCode(null)).toBe('···')
-    expect(orderCode(tickOrder(null, 0))).toBe('HLD')
-    expect(orderCode(tickOrder('left', 0))).toBe('L60')
-    expect(orderCode(tickOrder(null, 1))).toBe('ADV')
-    expect(orderCode(tickOrder('right', 1))).toBe('R60·ADV')
-    expect(orderCode(tickOrder(null, 2))).toBe('ADV×2')
+    expect(orderCode(HOLD)).toBe('HLD')
+    expect(orderCode(roundOrder(-1, 1, 0))).toBe('L60·ADV')
+    expect(orderCode(roundOrder(0, 2, 3))).toBe('ADV×2·R60×3')
   })
 })
 
@@ -396,7 +469,7 @@ describe('shotsAmong', () => {
     expect(shots[0]).toMatchObject({ shooterId: 'b', targetId: 'm', hits: 4 })
   })
 
-  it('denies the shot to a unit that advanced this tick', () => {
+  it('denies the shot to a unit that advanced this round', () => {
     expect(shotsAmong([bow, mark], new Set(['b']), scripted(4))).toHaveLength(0)
   })
 
@@ -407,51 +480,60 @@ describe('shotsAmong', () => {
 })
 
 describe('shooting within a round', () => {
-  const hold = tickOrder(null, 0)
-  const standFast = queue(hold, hold, hold)
-
-  it('wears a target down over the ticks of a round', () => {
+  it('looses once a round, once all the moving is done', () => {
     const bow = unit('b', 'archers', 'player', 0, 3, 'E')
     const mark = unit('m', 'cavalry', 'enemy', 3, 3, 'W')
-    const frames = resolveRound([bow, mark], { b: standFast, m: standFast }, scripted(4))
-    expect(frames[0].shots).toHaveLength(1)
-    expect(frames[2].units.find((u) => u.id === 'm')?.hits).toBe(12)
+    const result = resolveRound([bow, mark], standFast(bow, mark), scripted(4))
+    expect(result.shots).toHaveLength(1)
+    expect(result.units.find((u) => u.id === 'm')?.hits).toBe(4)
   })
 
-  it('lets a unit wheel onto a target and still shoot that tick', () => {
+  it('lets a unit turn onto a target and still shoot', () => {
     // facing E, the target sits NE — out of the cone until the free wheel
     const bow = unit('b', 'archers', 'player', 0, 3, 'E')
     const mark = unit('m', 'cavalry', 'enemy', 2, 1, 'SW')
-    const frames = resolveRound(
+    const result = resolveRound(
       [bow, mark],
-      { b: queue(tickOrder('left', 0), hold, hold), m: standFast },
+      { b: roundOrder(-1, 0, 0), m: HOLD },
       scripted(4),
     )
-    expect(frames[0].shots).toHaveLength(1)
-    expect(frames[0].shots[0].targetId).toBe('m')
+    expect(result.shots).toHaveLength(1)
+    expect(result.shots[0].targetId).toBe('m')
   })
 
-  it('costs the shot when the tick is spent advancing', () => {
-    const bow = unit('b', 'archers', 'player', 0, 3, 'E')
-    const mark = unit('m', 'cavalry', 'enemy', 4, 3, 'W')
-    const frames = resolveRound(
+  it('shoots along the facing the turns after the advance leave it in', () => {
+    // the archers hold their ground and wheel twice, onto a target behind them
+    const bow = unit('b', 'archers', 'player', 3, 3, 'E')
+    const mark = unit('m', 'cavalry', 'enemy', 1, 3, 'E')
+    const result = resolveRound(
       [bow, mark],
-      { b: queue(tickOrder(null, 1), hold, hold), m: standFast },
+      { b: roundOrder(0, 0, 3), m: HOLD },
       scripted(4),
     )
-    expect(frames[0].shots).toHaveLength(0)
-    expect(frames[1].shots).toHaveLength(1)
+    expect(result.moved.find((u) => u.id === 'b')?.facing).toBe('W')
+    expect(result.shots.map((shot) => shot.targetId)).toEqual(['m'])
+  })
+
+  it('costs the shot when the round is spent advancing', () => {
+    const bow = unit('b', 'archers', 'player', 0, 3, 'E')
+    const mark = unit('m', 'cavalry', 'enemy', 4, 3, 'W')
+    const result = resolveRound(
+      [bow, mark],
+      { b: roundOrder(0, 1, 0), m: HOLD },
+      scripted(4),
+    )
+    expect(result.shots).toHaveLength(0)
   })
 
   it('adds shooting hits and melee hits before checking elimination', () => {
-    // archers adjacent to their mark both shoot it and fight it in one tick
+    // archers adjacent to their mark both shoot it and fight it in one round
     const bow = unit('b', 'archers', 'player', 0, 3, 'E')
     const mark = unit('m', 'cavalry', 'enemy', 1, 3, 'W')
-    const frames = resolveRound([bow, mark], { b: standFast, m: standFast }, scripted(4))
-    expect(frames[0].shots).toHaveLength(1)
-    expect(frames[0].engagements).toHaveLength(1)
+    const result = resolveRound([bow, mark], standFast(bow, mark), scripted(4))
+    expect(result.shots).toHaveLength(1)
+    expect(result.engagements).toHaveLength(1)
     // 4 from the shot plus 4 from the melee
-    expect(frames[0].units.find((u) => u.id === 'm')?.hits).toBe(8)
+    expect(result.units.find((u) => u.id === 'm')?.hits).toBe(8)
   })
 })
 
@@ -491,90 +573,78 @@ describe('meleeLock', () => {
 })
 
 describe('combat lock', () => {
-  const hold = tickOrder(null, 0)
-  const standFast = queue(hold, hold, hold)
-  const advance = queue(tickOrder(null, 1), tickOrder(null, 1), tickOrder(null, 1))
+  const charge = roundOrder(0, 2, 0)
 
-  it('refuses an engaged unit its advance', () => {
+  it('refuses the advance of a unit the enemy already has hold of', () => {
     const a = unit('a', 'cavalry', 'player', 0, 3, 'E')
     const foe = unit('x', 'cavalry', 'enemy', 1, 3, 'W')
-    const steps = previewAll([a, foe], { a: advance, x: standFast })
-    expect(steps.a[0].pos).toEqual(hex(0, 3))
-    expect(steps.a[0].locked).toBe(true)
-    expect(steps.a[2].pos).toEqual(hex(0, 3))
+    const previews = previewAll([a, foe], { a: charge, x: HOLD })
+    expect(previews.a.pos).toEqual(hex(0, 3))
+    expect(previews.a.locked).toBe(true)
+    expect(previews.a.advanced).toBe(false)
   })
 
-  it('lets a unit engaged only on its rear turn to meet the attack', () => {
+  it('lets a unit held only on its rear turn to meet the attack', () => {
     const a = unit('a', 'cavalry', 'player', 1, 3, 'E')
     const behind = unit('b', 'cavalry', 'enemy', 0, 3, 'E')
-    const steps = previewAll([a, behind], {
-      a: queue(tickOrder('left', 0), hold, hold),
-      b: standFast,
+    const previews = previewAll([a, behind], {
+      a: roundOrder(-1, 0, 0),
+      b: HOLD,
     })
-    expect(steps.a[0].facing).toBe('NE')
-    expect(steps.a[0].locked).toBe(false)
+    expect(previews.a.facing).toBe('NE')
+    expect(previews.a.locked).toBe(false)
   })
 
-  it('refuses the turn when the unit is also held frontally', () => {
+  it('refuses the turns when the unit is also held frontally', () => {
     const a = unit('a', 'cavalry', 'player', 1, 3, 'E')
     const front = unit('f', 'cavalry', 'enemy', 2, 3, 'W')
     const behind = unit('b', 'cavalry', 'enemy', 0, 3, 'E')
-    const steps = previewAll([a, front, behind], {
-      a: queue(tickOrder('left', 0), hold, hold),
-      f: standFast,
-      b: standFast,
+    const previews = previewAll([a, front, behind], {
+      a: roundOrder(-1, 0, 0),
+      f: HOLD,
+      b: HOLD,
     })
-    expect(steps.a[0].facing).toBe('E')
-    expect(steps.a[0].locked).toBe(true)
+    expect(previews.a.facing).toBe('E')
+    expect(previews.a.locked).toBe(true)
   })
 
-  it('locks a unit from the tick it makes contact, not before', () => {
+  it('judges the lock as the round opens, so a charge closes freely', () => {
     const a = unit('a', 'cavalry', 'player', 0, 3, 'E')
-    const foe = unit('x', 'cavalry', 'enemy', 2, 3, 'W')
-    const steps = previewAll([a, foe], { a: advance, x: standFast })
-    // T1 closes to contact, T2 and T3 are held by the melee that results
-    expect(steps.a[0].pos).toEqual(hex(1, 3))
-    expect(steps.a[0].locked).toBe(false)
-    expect(steps.a[1].pos).toEqual(hex(1, 3))
-    expect(steps.a[1].locked).toBe(true)
-  })
-
-  it('spends no allowance on a refused order, unlike a blocked one', () => {
-    // infantry may move 2. T1 is locked and costs nothing, so once the enemy
-    // dies the unit still has both hexes for T2 and T3.
-    const a = unit('a', 'infantry', 'player', 0, 3, 'E')
-    const dying = { ...unit('x', 'cavalry', 'enemy', 1, 3, 'W'), hits: 14 }
-    const frames = resolveRound([a, dying], { a: advance, x: standFast }, scripted(6))
-    expect(frames[0].lockedIds).toContain('a')
-    expect(frames[0].moved.find((u) => u.id === 'a')?.pos).toEqual(hex(0, 3))
-    expect(frames[0].eliminatedIds).toContain('x')
-    expect(frames[2].units.find((u) => u.id === 'a')?.pos).toEqual(hex(2, 3))
+    const foe = unit('x', 'cavalry', 'enemy', 3, 3, 'W')
+    const first = resolveRound([a, foe], { a: charge, x: HOLD }, scripted(3))
+    // it closes to contact this round, unheld, and fights at the end of it
+    expect(first.lockedIds).not.toContain('a')
+    expect(first.moved.find((u) => u.id === 'a')?.pos).toEqual(hex(2, 3))
+    expect(first.engagements).toHaveLength(1)
+    // next round the melee it made has hold of it
+    const second = resolveRound(survivors(first), { a: charge, x: HOLD }, scripted(3))
+    expect(second.lockedIds).toContain('a')
+    expect(second.moved.find((u) => u.id === 'a')?.pos).toEqual(hex(2, 3))
   })
 
   it('still lets a locked unit shoot, since it never moved', () => {
     const bow = unit('b', 'archers', 'player', 0, 3, 'E')
     const foe = unit('x', 'cavalry', 'enemy', 1, 3, 'W')
-    const frames = resolveRound([bow, foe], { b: advance, x: standFast }, scripted(4))
-    expect(frames[0].lockedIds).toContain('b')
-    expect(frames[0].shots).toHaveLength(1)
-    expect(frames[0].shots[0].targetId).toBe('x')
+    const result = resolveRound([bow, foe], { b: charge, x: HOLD }, scripted(4))
+    expect(result.lockedIds).toContain('b')
+    expect(result.shots).toHaveLength(1)
+    expect(result.shots[0].targetId).toBe('x')
   })
 
   it('never reports an eliminated unit as locked or moving', () => {
-    // the archers die on tick 1 and must not go on drawing orders after it
-    const bow = { ...unit('b', 'archers', 'player', 1, 3, 'E'), hits: 14 }
+    const dead = { ...unit('d', 'archers', 'player', 1, 3, 'E'), hits: HITS_TO_ELIMINATE }
     const foe = unit('x', 'infantry', 'enemy', 2, 3, 'W')
-    const frames = resolveRound([bow, foe], { b: advance, x: standFast }, scripted(6))
-    expect(frames[0].eliminatedIds).toContain('b')
-    expect(frames[1].lockedIds).not.toContain('b')
-    expect(frames[2].lockedIds).not.toContain('b')
+    const result = resolveRound([dead, foe], { d: charge, x: HOLD }, scripted(6))
+    expect(result.lockedIds).not.toContain('d')
+    expect(result.blockedIds).not.toContain('d')
+    expect(result.engagements).toHaveLength(0)
   })
 
   it('does not lock a unit that is merely near the enemy', () => {
     const a = unit('a', 'cavalry', 'player', 0, 3, 'E')
     const foe = unit('x', 'cavalry', 'enemy', 3, 3, 'W')
-    const steps = previewAll([a, foe], { a: advance, x: standFast })
-    expect(steps.a[0].locked).toBe(false)
-    expect(steps.a[0].pos).toEqual(hex(1, 3))
+    const previews = previewAll([a, foe], { a: roundOrder(0, 1, 0), x: HOLD })
+    expect(previews.a.locked).toBe(false)
+    expect(previews.a.pos).toEqual(hex(1, 3))
   })
 })
