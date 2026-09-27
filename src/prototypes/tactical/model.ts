@@ -9,6 +9,8 @@ import {
   HEX_DIRECTIONS,
   HEX_DIRECTION_VECTORS,
   hex,
+  hexDistance,
+  hexEquals,
   hexToPixel,
 } from '../../engine'
 import type { Hex, HexDirection } from '../../engine'
@@ -19,6 +21,12 @@ export const BOARD_ROWS = 7
 
 /** A unit is removed from play once it has acquired this many hits. */
 export const HITS_TO_ELIMINATE = 15
+
+/**
+ * Half-angle of a shooter's field of fire, in degrees. The book lets a unit
+ * shoot "at a single target within 45° of their frontal facing".
+ */
+export const FIELD_OF_FIRE = 45
 
 export type Side = 'player' | 'enemy'
 
@@ -43,11 +51,18 @@ export interface UnitProfile {
   movement: number
   /** Armoured targets acquire half the hits mandated against them. */
   armoured: boolean
+  /**
+   * Added to the d6 when this type shoots, or null if it cannot shoot at all.
+   * Zero is a real value here — archers shoot on an unmodified die.
+   */
+  shootModifier: number | null
+  /** Range in hexes. Meaningless when the type cannot shoot. */
+  range: number
 }
 
 /**
- * The book's four types. Movement converts its inches at 3" per hex: Infantry
- * and Archers 6", Skirmishers 9", Cavalry 12".
+ * The book's four types. Distances convert at 3" per hex: movement of 6" /
+ * 6" / 9" / 12", and a shooting range of 12" for the two types that shoot.
  */
 export const UNIT_PROFILES: Record<UnitType, UnitProfile> = {
   infantry: {
@@ -56,6 +71,8 @@ export const UNIT_PROFILES: Record<UnitType, UnitProfile> = {
     meleeModifier: 2,
     movement: 2,
     armoured: true,
+    shootModifier: null,
+    range: 0,
   },
   archers: {
     code: 'ARC',
@@ -63,6 +80,8 @@ export const UNIT_PROFILES: Record<UnitType, UnitProfile> = {
     meleeModifier: 0,
     movement: 2,
     armoured: false,
+    shootModifier: 0,
+    range: 4,
   },
   skirmishers: {
     code: 'SKM',
@@ -70,6 +89,8 @@ export const UNIT_PROFILES: Record<UnitType, UnitProfile> = {
     meleeModifier: -2,
     movement: 3,
     armoured: false,
+    shootModifier: -2,
+    range: 4,
   },
   cavalry: {
     code: 'CAV',
@@ -77,6 +98,8 @@ export const UNIT_PROFILES: Record<UnitType, UnitProfile> = {
     meleeModifier: 0,
     movement: 4,
     armoured: false,
+    shootModifier: null,
+    range: 0,
   },
 }
 
@@ -107,6 +130,11 @@ export function isAlive(unit: UnitState): boolean {
 /** Hexes this unit may still advance, given what its queue already spends. */
 export function movementOf(unit: UnitState): number {
   return profileOf(unit).movement
+}
+
+/** Only Archers and Skirmishers may shoot. */
+export function canShoot(unit: UnitState): boolean {
+  return profileOf(unit).shootModifier !== null
 }
 
 // ── orders ────────────────────────────────────────────────
@@ -211,6 +239,37 @@ export function edgeBetween(from: Hex, to: Hex): HexDirection | null {
     if (vector.q === dq && vector.r === dr) return direction
   }
   return null
+}
+
+/** Screen-space bearing (degrees, y-down) from one hex's centre to another's. */
+export function bearingBetween(from: Hex, to: Hex): number {
+  const a = hexToPixel(from, 1)
+  const b = hexToPixel(to, 1)
+  return (Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI
+}
+
+/** Smallest absolute difference between two bearings, in degrees. */
+export function angleBetween(a: number, b: number): number {
+  const delta = Math.abs(a - b) % 360
+  return delta > 180 ? 360 - delta : delta
+}
+
+/**
+ * Whether `target` lies in the shooter's field of fire — the book's 45° either
+ * side of the faced edge, measured as a real bearing so the cone widens with
+ * distance the way it does on the tabletop.
+ */
+export function inFieldOfFire(shooter: UnitState, target: Hex): boolean {
+  if (hexEquals(shooter.pos, target)) return false
+  const bearing = bearingBetween(shooter.pos, target)
+  return angleBetween(facingAngle(shooter.facing), bearing) <= FIELD_OF_FIRE
+}
+
+/** Whether `target` is a legal shot for this unit: in range and in the cone. */
+export function canShootAt(shooter: UnitState, target: Hex): boolean {
+  if (!canShoot(shooter)) return false
+  if (hexDistance(shooter.pos, target) > profileOf(shooter).range) return false
+  return inFieldOfFire(shooter, target)
 }
 
 /** Facing edge + its two neighbours are front; the other three are rear. */

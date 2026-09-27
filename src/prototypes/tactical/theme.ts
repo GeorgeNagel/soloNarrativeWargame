@@ -304,6 +304,15 @@ export const CSS = `
   18%{opacity:1;transform:translateY(2px) scale(1.12)}
   100%{opacity:0;transform:translateY(20px) scale(1)}
 }
+/* the shot flies: stroke-dashoffset inherits down to the line, so the dashes
+   run along the flight path before the whole trace fades out. */
+.tc-shot{animation:tc-shot 760ms ease-out both;}
+@keyframes tc-shot{
+  0%{opacity:0;stroke-dashoffset:24}
+  22%{opacity:1;stroke-dashoffset:0}
+  68%{opacity:1}
+  100%{opacity:0}
+}
 .tc-edge{animation:tc-edge 820ms ease-out both;}
 @keyframes tc-edge{
   0%{opacity:0}
@@ -338,6 +347,7 @@ export const CSS = `
 }
 @media (prefers-reduced-motion:reduce){
   .tc-retspin,.tc-retpulse{animation:none;}
+  .tc-shot{animation-duration:1ms;animation-delay:0ms;opacity:1;}
 }
 .tc-shake{animation:tc-shake 400ms ease-in-out;}
 @keyframes tc-shake{

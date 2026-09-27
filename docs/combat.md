@@ -49,6 +49,28 @@ board carries no terrain yet, so that modifier is not implemented.
   its alternating player turns. Orders here are committed for every unit at the
   start of the round and resolve together, so combat resolves together too.
 
+## Movement within combat
+
+- **Engaged units are locked.** Hand-to-hand combat only concludes with the
+  elimination of one of the contesting sides, so a unit adjacent to a living
+  enemy may not advance. Its advance orders for that tick are refused.
+- **A unit held only on its rear may turn to meet the attack**, but not if it is
+  simultaneously engaged through its front arc. A unit held frontally cannot
+  turn at all.
+- The lock is judged at the start of each tick, against the engagements that
+  existed when the tick opened. A unit that closes to contact on one tick is
+  free that tick and locked on the next.
+- A refused order **costs nothing** — it never happened, so the unit keeps its
+  movement allowance and may spend it once the melee ends. This is unlike an
+  advance blocked by a held hex, which is paid for. A locked unit has not
+  moved, so it may still shoot.
+- The book lets a unit "turn to face an attack upon their flank or rear". Here
+  the turn is not required to be toward the attacker — any 60° wheel is
+  allowed, which is a simplification of the book's wording.
+
+Shooting is resolved at the same tick boundary, just before the melee, and its
+hits are added before elimination is checked. See `docs/shooting.md`.
+
 ## Elimination
 
 - A unit is **eliminated once it has acquired 15 hits**.

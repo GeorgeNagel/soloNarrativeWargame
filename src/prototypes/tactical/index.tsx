@@ -5,6 +5,7 @@ import type { LogRow, PadAction, SlotFocus } from './OrdersConsole'
 import { CSS } from './theme'
 import {
   HOLD,
+  canShoot,
   MAX_ADVANCES_PER_TICK,
   TICKS_PER_ROUND,
   boardTiles,
@@ -21,14 +22,18 @@ import type { PreviewMap, TickFrame } from './sim'
 
 const SCENARIO = 'ST. AUBIN FORD'
 const MOVE_MS = 640
+const SHOOT_MS = 760
 const CLASH_MS = 900
 /** Each extra engagement in the same tick gets its own beat, so they read in order. */
 const CLASH_STAGGER_MS = 260
 
+/** A tick plays out in the book's order: move, then shoot, then melee. */
+type PlaybackStep = 'move' | 'shoot' | 'clash'
+
 interface Playback {
   frames: TickFrame[]
   index: number
-  step: 'move' | 'clash'
+  step: PlaybackStep
 }
 
 function freshSlots(units: UnitState[]): Record<string, OrderSlots> {
@@ -70,9 +75,18 @@ function TacticalConsole() {
     const frame = playback.frames[playback.index]
     const beats = Math.max(1, frame.engagements.length)
     const ms =
-      playback.step === 'move' ? MOVE_MS : CLASH_MS + (beats - 1) * CLASH_STAGGER_MS
+      playback.step === 'move'
+        ? MOVE_MS
+        : playback.step === 'shoot'
+          ? SHOOT_MS
+          : CLASH_MS + (beats - 1) * CLASH_STAGGER_MS
     const timer = window.setTimeout(() => {
       if (playback.step === 'move') {
+        // a tick with nothing loosed skips straight to the melee
+        setPlayback({ ...playback, step: frame.shots.length > 0 ? 'shoot' : 'clash' })
+        return
+      }
+      if (playback.step === 'shoot') {
         setPlayback({ ...playback, step: 'clash' })
         return
       }
@@ -209,18 +223,44 @@ function TacticalConsole() {
 
   // ── what the board shows right now ──────────────────────
   const frame = playback ? playback.frames[playback.index] : null
-  const shown = frame ? (playback?.step === 'move' ? frame.moved : frame.units) : units
+  const shown = frame ? (playback?.step === 'clash' ? frame.units : frame.moved) : units
   const showClash = playback?.step === 'clash'
+  const showShots = playback?.step === 'shoot'
   const liveTick = frame ? frame.tick : null
 
   // Every friendly queue is dry-run together, so traces account for each other.
   const previews: PreviewMap | null = playing ? null : previewAll(units, slots)
+
+  /**
+   * The field of fire to draw while planning. Wheels only live in the queue
+   * until the round resolves, so the cone has to come from the dry-run: it
+   * shows where this unit points at the tick being written. A tick spent
+   * advancing buys no shot, so that tick shows no cone at all.
+   */
+  const arcUnit: UnitState | null = (() => {
+    const selected = units.find((unit) => unit.id === selectedId) ?? null
+    if (playing || !selected || !canShoot(selected)) return null
+    if (!focus || focus.unitId !== selected.id) return selected
+    const step = previews?.[selected.id]?.[focus.tick]
+    if (!step) return selected
+    if ((slots[selected.id]?.[focus.tick]?.advances ?? 0) > 0) return null
+    return { ...selected, pos: step.pos, facing: step.facing }
+  })()
 
   // ── live tick log ───────────────────────────────────────
   const log: LogRow[] = []
   if (frame) {
     const tagOf = (id: string) => shown.find((unit) => unit.id === id)?.tag ?? id
     const sideOf = (id: string) => shown.find((unit) => unit.id === id)?.side
+    if (showShots) {
+      frame.shots.forEach((shot) => {
+        log.push({
+          k: `${tagOf(shot.shooterId)} ⇢ ${tagOf(shot.targetId)}`,
+          v: `d${shot.roll} · +${shot.hits}`,
+          tone: sideOf(shot.targetId) === 'player' ? 'hot' : 'ok',
+        })
+      })
+    }
     if (showClash) {
       frame.engagements.forEach((fight, i) => {
         const beat = frame.engagements.length > 1 ? `${i + 1} · ` : ''
@@ -245,6 +285,9 @@ function TacticalConsole() {
     for (const id of frame.blockedIds) {
       log.push({ k: `${tagOf(id)} ADV`, v: 'BLOCKED', tone: 'warn' })
     }
+    for (const id of frame.lockedIds) {
+      log.push({ k: `${tagOf(id)}`, v: 'HELD IN MELEE', tone: 'warn' })
+    }
   }
 
   const fights = frame ? frame.engagements.length : 0
@@ -254,7 +297,11 @@ function TacticalConsole() {
       ? 'LINE BROKEN — FIELD LOST'
       : 'FIELD HELD — OPFOR BROKEN'
     : playing
-      ? showClash
+      ? showShots
+        ? frame && frame.shots.length > 1
+          ? `${frame.shots.length} VOLLEYS`
+          : 'SHOOTING'
+        : showClash
         ? fights > 0
           ? fights > 1
             ? `${fights} ENGAGEMENTS`
@@ -324,7 +371,11 @@ function TacticalConsole() {
               previews={previews}
               slots={slots}
               engagements={frame && showClash ? frame.engagements : []}
-              blockedIds={frame && !showClash ? frame.blockedIds : []}
+              arcUnit={arcUnit}
+              shots={frame && showShots ? frame.shots : []}
+              showShots={Boolean(showShots)}
+              blockedIds={frame && playback?.step === 'move' ? frame.blockedIds : []}
+              lockedIds={frame && playback?.step === 'move' ? frame.lockedIds : []}
               showClash={Boolean(showClash)}
               beatKey={(playback?.index ?? 0) + round * 10}
               playing={playing}
@@ -332,7 +383,8 @@ function TacticalConsole() {
           </div>
           <div className="tc-stage-rail foot">
             <span>
-              WHEELS FREE · ADV COSTS A HEX · ONE FIGHT PER FACE · REAR 3 EDGES DOUBLE HITS
+              WHEELS FREE · ADV COSTS A HEX · SHOOT 4 HEXES IN A 45° CONE, IF YOU DID NOT
+              ADVANCE · REAR 3 EDGES DOUBLE HITS
             </span>
           </div>
         </div>
