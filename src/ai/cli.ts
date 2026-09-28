@@ -23,12 +23,13 @@ import {
 } from './checkpoint'
 import type { RunPaths } from './checkpoint'
 import { describeGenome } from './describe'
-import { DEFAULTS, evolve } from './evolve'
-import type { GenerationReport, ResolvedOptions, RunState } from './evolve'
+import { ANNEAL_SHAPES, DEFAULTS, evolve, resolveOptions } from './evolve'
+import type { AnnealShape, GenerationReport, ResolvedOptions, RunState } from './evolve'
 import { genomeSize } from './genome'
 import type { Genome } from './genome'
 import { allOpponents, nameProblem, saveOpponent } from './saved-opponents'
 import type { Standing } from './tournament'
+import type { MutationWeights } from './tree'
 
 interface Flags {
   pop: number
@@ -37,6 +38,13 @@ interface Flags {
   seed: number
   depth: number
   mutation: number
+  mutationEnd: number | null
+  anneal: AnnealShape
+  annealGens: number | null
+  mutationWeights: MutationWeights
+  crossover: number
+  survivors: number
+  tournament: number
   elites: number
   cap: number
   playoff: number
@@ -56,7 +64,28 @@ const USAGE = `Usage: npm run evolve -- [flags]
                    from both sides (default ${DEFAULTS.games})
   --seed N         seed for the whole run (default ${DEFAULTS.seed})
   --depth N        maximum tree depth (default ${DEFAULTS.maxDepth})
-  --mutation P     per-node mutation chance (default ${DEFAULTS.mutationRate})
+  --mutation P     per-node mutation chance in the first bred generation
+                   (default ${DEFAULTS.mutationRate})
+  --mutation-end P per-node mutation chance once annealing is done; the rate
+                   moves from --mutation to this (default: same as --mutation,
+                   no annealing)
+  --anneal SHAPE   linear: equal steps; geometric: equal factors, falling fast
+                   early and gently late (default ${DEFAULTS.annealShape})
+  --anneal-gens N  generations the rate takes to reach --mutation-end, holding
+                   there after (default: --gens)
+  --mutation-mix W relative odds of each kind of mutation, as KIND=N pairs
+                   separated by commas; unnamed kinds keep their default
+                   (default ${weightsText(DEFAULTS.mutationWeights)})
+                     threshold  move a branch's threshold one step
+                     feature    point a branch at a different feature
+                     nudge      nudge a leaf's order or posture
+                     replace    replace a leaf's order or posture outright
+                     structure  regrow a subtree, or collapse a branch
+  --crossover P    per-tree chance a child is crossed from both parents rather
+                   than copied from one (default ${DEFAULTS.crossoverRate})
+  --survivors F    fraction of the ranking that breeds (default ${DEFAULTS.survivorFraction})
+  --tournament N   survivors drawn per parent pick, best wins; 1 is uniform,
+                   higher favours the leaders more (default ${DEFAULTS.tournamentSize})
   --elites N       top genomes carried over untouched (default ${DEFAULTS.elites})
   --cap N          rounds before a game is called off (default ${DEFAULTS.roundCap})
   --playoff N      boards in the final playoff between generation leaders (default ${DEFAULTS.playoffGames})
@@ -68,6 +97,28 @@ const USAGE = `Usage: npm run evolve -- [flags]
   --quiet          only print the final report
 `
 
+function weightsText(weights: MutationWeights): string {
+  return Object.entries(weights)
+    .map(([kind, weight]) => `${kind}=${weight}`)
+    .join(',')
+}
+
+/** `threshold=4,structure=0` onto `base`, so a flag names only what it changes. */
+function parseWeights(text: string, base: MutationWeights): MutationWeights {
+  const weights = { ...base }
+  for (const pair of text.split(',')) {
+    const [kind, amount] = pair.split('=')
+    if (!(kind in weights) || amount === undefined || amount.trim() === '') {
+      throw new Error(
+        `--mutation-mix: expected KIND=N with KIND one of ` +
+          `${Object.keys(weights).join(', ')}, got "${pair}"`,
+      )
+    }
+    weights[kind as keyof MutationWeights] = Number(amount)
+  }
+  return weights
+}
+
 function parseFlags(argv: string[]): Flags {
   const flags: Flags = {
     pop: DEFAULTS.populationSize,
@@ -76,6 +127,13 @@ function parseFlags(argv: string[]): Flags {
     seed: DEFAULTS.seed,
     depth: DEFAULTS.maxDepth,
     mutation: DEFAULTS.mutationRate,
+    mutationEnd: null,
+    anneal: DEFAULTS.annealShape,
+    annealGens: null,
+    mutationWeights: DEFAULTS.mutationWeights,
+    crossover: DEFAULTS.crossoverRate,
+    survivors: DEFAULTS.survivorFraction,
+    tournament: DEFAULTS.tournamentSize,
     elites: DEFAULTS.elites,
     cap: DEFAULTS.roundCap,
     playoff: DEFAULTS.playoffGames,
@@ -119,6 +177,30 @@ function parseFlags(argv: string[]): Flags {
       case '--mutation':
         flags.mutation = Number(value)
         break
+      case '--mutation-end':
+        flags.mutationEnd = Number(value)
+        break
+      case '--anneal':
+        if (!ANNEAL_SHAPES.includes(value as AnnealShape)) {
+          throw new Error(`--anneal: expected one of ${ANNEAL_SHAPES.join(', ')}, got "${value}"`)
+        }
+        flags.anneal = value as AnnealShape
+        break
+      case '--anneal-gens':
+        flags.annealGens = Number(value)
+        break
+      case '--mutation-mix':
+        flags.mutationWeights = parseWeights(value, flags.mutationWeights)
+        break
+      case '--crossover':
+        flags.crossover = Number(value)
+        break
+      case '--survivors':
+        flags.survivors = Number(value)
+        break
+      case '--tournament':
+        flags.tournament = Number(value)
+        break
       case '--elites':
         flags.elites = Number(value)
         break
@@ -151,15 +233,39 @@ function parseFlags(argv: string[]): Flags {
   return flags
 }
 
-/** A run's default name, which says what produced it and nothing that drifts. */
+/**
+ * A run's default name, which says what produced it and nothing that drifts.
+ * Breeding settings appear only when they differ from the defaults, so two runs
+ * that differ only in how they breed do not share a directory.
+ */
 function defaultRunId(options: ResolvedOptions): string {
-  return [
+  const parts = [
     `pop${options.populationSize}`,
     `gen${options.generations}`,
     `games${options.games}`,
     `depth${options.maxDepth}`,
-    `seed${options.seed}`,
-  ].join('-')
+  ]
+  const annealed = options.finalMutationRate !== options.mutationRate
+  if (annealed) {
+    parts.push(
+      `mut${options.mutationRate}to${options.finalMutationRate}` +
+        `${options.annealShape === 'linear' ? 'lin' : 'geo'}` +
+        `${options.annealGenerations === options.generations ? '' : `over${options.annealGenerations}`}`,
+    )
+  } else if (options.mutationRate !== DEFAULTS.mutationRate) {
+    parts.push(`mut${options.mutationRate}`)
+  }
+  const mix = Object.values(options.mutationWeights)
+  if (mix.join() !== Object.values(DEFAULTS.mutationWeights).join()) {
+    parts.push(`mix${mix.join('.')}`)
+  }
+  if (options.crossoverRate !== DEFAULTS.crossoverRate) parts.push(`xo${options.crossoverRate}`)
+  if (options.survivorFraction !== DEFAULTS.survivorFraction) {
+    parts.push(`surv${options.survivorFraction}`)
+  }
+  if (options.tournamentSize !== DEFAULTS.tournamentSize) parts.push(`tour${options.tournamentSize}`)
+  parts.push(`seed${options.seed}`)
+  return parts.join('-')
 }
 
 // ── printing ──────────────────────────────────────────────
@@ -186,6 +292,7 @@ function header(options: ResolvedOptions): string {
     pad('worst', 7),
     pad('rounds', 7),
     pad('nodes', 7),
+    pad('mut', 6),
     ...options.opponents.map((opponent, index) => pad(opponent.id, widths[index])),
   ].join(' ')
 }
@@ -199,6 +306,7 @@ function line(report: GenerationReport, options: ResolvedOptions): string {
     pad(num(report.worst), 7),
     pad(num(report.rounds, 1), 7),
     pad(num(report.nodes, 1), 7),
+    pad(num(report.mutation), 6),
     ...report.against.map((mark, index) => pad(num(mark.winRate), widths[index])),
   ].join(' ')
 }
@@ -322,8 +430,7 @@ async function main(): Promise<void> {
     )
   }
 
-  const settled: ResolvedOptions = resumed ?? {
-    ...DEFAULTS,
+  const settled: ResolvedOptions = resumed ?? resolveOptions({
     populationSize: flags.pop,
     generations: flags.gens,
     games: flags.games,
@@ -331,10 +438,17 @@ async function main(): Promise<void> {
     roundCap: flags.cap,
     maxDepth: flags.depth,
     mutationRate: flags.mutation,
+    ...(flags.mutationEnd === null ? {} : { finalMutationRate: flags.mutationEnd }),
+    annealShape: flags.anneal,
+    ...(flags.annealGens === null ? {} : { annealGenerations: flags.annealGens }),
+    mutationWeights: flags.mutationWeights,
+    crossoverRate: flags.crossover,
+    survivorFraction: flags.survivors,
+    tournamentSize: flags.tournament,
     elites: flags.elites,
     playoffGames: flags.playoff,
     opponents: allOpponents(flags.outDir),
-  }
+  })
   const runId = flags.runId ?? resumedId ?? defaultRunId(settled)
   const paths = runPaths(flags.outDir, runId)
 

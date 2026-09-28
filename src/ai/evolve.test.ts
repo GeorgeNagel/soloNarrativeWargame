@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest'
 import { UNIT_TYPES } from '../prototypes/tactical/model'
 import { closeOnNearest, holdFast } from './baseline'
 import {
+  DEFAULTS,
   breed,
   evolve,
   initialPopulation,
+  mutationRateAt,
   nextGeneration,
   resolveOptions,
 } from './evolve'
@@ -121,7 +123,7 @@ describe('breed', () => {
     for (let i = 0; i < 40; i += 1) {
       const a = randomGenome('a', rng, 0, SPECS)
       const b = randomGenome('b', rng, 0, SPECS)
-      const child = breed(a, b, 'c', 3, rng, SPECS, 0.3)
+      const child = breed(a, b, 'c', 3, rng, SPECS, { ...SMALL, mutationRate: 0.3 })
       expect(child.id).toBe('c')
       expect(child.generation).toBe(3)
       for (const tree of treesOf(child)) {
@@ -135,8 +137,20 @@ describe('breed', () => {
     const a = randomGenome('a', rng, 0, SPECS)
     const b = randomGenome('b', rng, 0, SPECS)
     const before = JSON.stringify([a, b])
-    breed(a, b, 'c', 1, rng, SPECS, 0.5)
+    breed(a, b, 'c', 1, rng, SPECS, { ...SMALL, mutationRate: 0.5 })
     expect(JSON.stringify([a, b])).toBe(before)
+  })
+
+  it('copies the first parent when it neither crosses nor mutates', () => {
+    const rng = makeRng(7)
+    const a = randomGenome('a', rng, 0, SPECS)
+    const b = randomGenome('b', rng, 0, SPECS)
+    const child = breed(a, b, 'c', 1, rng, SPECS, {
+      ...SMALL,
+      mutationRate: 0,
+      crossoverRate: 0,
+    })
+    expect(treesOf(child)).toEqual(treesOf(a))
   })
 })
 
@@ -184,6 +198,88 @@ describe('nextGeneration', () => {
     })
     const next = nextGeneration(tiny, 1, makeRng(9), { ...SMALL, populationSize: 2 }, SPECS)
     expect(next.length).toBe(2)
+  })
+})
+
+describe('mutationRateAt', () => {
+  const schedule = {
+    mutationRate: 0.4,
+    finalMutationRate: 0.1,
+    annealShape: 'linear' as const,
+    annealGenerations: 4,
+  }
+
+  it('starts at the mutation rate and ends at the final one', () => {
+    expect(mutationRateAt(1, schedule)).toBeCloseTo(0.4, 10)
+    expect(mutationRateAt(4, schedule)).toBeCloseTo(0.1, 10)
+  })
+
+  it('steps evenly when linear', () => {
+    expect(mutationRateAt(2, schedule)).toBeCloseTo(0.3, 10)
+    expect(mutationRateAt(3, schedule)).toBeCloseTo(0.2, 10)
+  })
+
+  it('falls by an even factor when geometric', () => {
+    const geometric = { ...schedule, mutationRate: 0.8, annealShape: 'geometric' as const }
+    // 0.8 to 0.1 over three steps is a factor of a half each
+    expect(mutationRateAt(2, geometric)).toBeCloseTo(0.4, 10)
+    expect(mutationRateAt(3, geometric)).toBeCloseTo(0.2, 10)
+  })
+
+  it('holds the final rate once the anneal is done, and the start before it begins', () => {
+    expect(mutationRateAt(9, schedule)).toBeCloseTo(0.1, 10)
+    expect(mutationRateAt(0, schedule)).toBeCloseTo(0.4, 10)
+  })
+
+  it('does not anneal by default', () => {
+    const options = resolveOptions({ mutationRate: 0.3, generations: 10 })
+    for (let generation = 0; generation <= 10; generation += 1) {
+      expect(mutationRateAt(generation, options)).toBe(0.3)
+    }
+  })
+
+  it('breeds each generation at its scheduled rate', () => {
+    const standings = runGauntlet(population(6), [holdFast], { games: 1, seed: 4, roundCap: 8 })
+    // annealed to zero by generation 2, and never crossed: a child is its parent
+    const options = {
+      ...SMALL,
+      mutationRate: 0.9,
+      finalMutationRate: 0,
+      annealShape: 'linear' as const,
+      annealGenerations: 2,
+      crossoverRate: 0,
+    }
+    const survivors = standings.slice(0, 3).map((standing) => JSON.stringify(treesOf(standing.genome)))
+    const next = nextGeneration(standings, 2, makeRng(3), options, SPECS)
+    for (const genome of next) {
+      expect(survivors).toContain(JSON.stringify(treesOf(genome)))
+    }
+  })
+})
+
+describe('resolveOptions', () => {
+  it('anneals over the whole run unless told otherwise', () => {
+    expect(resolveOptions({ generations: 37 }).annealGenerations).toBe(37)
+    expect(resolveOptions({ generations: 37, annealGenerations: 5 }).annealGenerations).toBe(5)
+  })
+
+  it('ends at the starting rate unless told otherwise', () => {
+    expect(resolveOptions({ mutationRate: 0.4 }).finalMutationRate).toBe(0.4)
+  })
+
+  it('rejects settings breeding cannot use', () => {
+    expect(() => resolveOptions({ crossoverRate: 1.5 })).toThrow()
+    expect(() => resolveOptions({ tournamentSize: 0 })).toThrow()
+    expect(() => resolveOptions({ survivorFraction: 0 })).toThrow()
+    expect(() => resolveOptions({ finalMutationRate: 0 })).toThrow(/geometric/)
+    expect(() =>
+      resolveOptions({ finalMutationRate: 0, annealShape: 'linear' }),
+    ).not.toThrow()
+    expect(() =>
+      resolveOptions({
+        mutationWeights: { ...DEFAULTS.mutationWeights, threshold: 0, feature: 0, structure: 0 },
+      }),
+    ).toThrow(/branch/)
   })
 })
 

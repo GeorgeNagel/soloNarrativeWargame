@@ -98,9 +98,12 @@ drops the hexes whose mirror is off the board rather than distorting the mirror.
 2. **Ranking**, by mean score per game over all opponents, ties broken by mean
    differential. Every opponent gets the same number of games, so each weighs
    the same.
-3. **Reproduction.** The top half survives. The best `--elites` genomes carry
-   over untouched; the rest of the population is children of two survivors, each
-   drawn by a binary tournament so a better rank breeds more often.
+3. **Reproduction.** The top `--survivors` fraction (half, by default) survives.
+   The best `--elites` genomes carry over untouched; the rest of the population
+   is children of two survivors, each picked by a tournament: `--tournament`
+   survivors are drawn and the best-ranked one breeds. The default of 2 is a
+   binary tournament; 1 picks uniformly, and larger sizes lean harder on the top
+   of the ranking.
 4. **The leader is kept aside** for the playoff, once — an elite that leads
    several generations running is entered the first time only.
 
@@ -143,11 +146,32 @@ one, delete its file.
 A child is bred **tree by tree**: each of the five trees is crossed over with its
 counterpart on its own — a subtree of one parent's cavalry tree replaces a subtree
 of the other's — and then mutated. Crossing tree by tree is what lets a good
-cavalry tree survive while the infantry tree is recombined. Mutation walks every
-node and, per node, moves a threshold one step, repoints a branch at another
-feature, nudges or replaces a leaf's order, regrows a subtree, or collapses a
-branch into one of the leaves it held. Children are pruned back to the depth limit
-by collapsing anything deeper into a leaf it contained.
+cavalry tree survive while the infantry tree is recombined. `--crossover` is the
+per-tree chance of crossing; a tree that is not crossed is copied from the first
+parent. Mutation walks every node and, per node, moves a threshold one step,
+repoints a branch at another feature, nudges or replaces a leaf's order, regrows a
+subtree, or collapses a branch into one of the leaves it held.
+`--mutation-mix` sets the relative odds of those kinds, for example
+`--mutation-mix structure=3,threshold=2`. Children are pruned back to the depth
+limit by collapsing anything deeper into a leaf it contained.
+
+### Annealing
+
+The mutation rate can start high and fall over the run, so early generations
+explore widely and later ones refine. `--mutation` is the rate that breeds
+generation 1, `--mutation-end` the rate it reaches by generation `--anneal-gens`
+(the whole run, by default), after which it holds. `--anneal linear` moves in
+equal steps. `--anneal geometric`, the default, moves by an equal factor each
+generation, so the rate falls fast early and gently late; it cannot start or end
+at 0. Without `--mutation-end` the rate never changes. The rate each generation
+was bred at is printed in the `mut` column and written to `curve.csv`.
+
+```
+npm run evolve -- --gens 60 --mutation 0.4 --mutation-end 0.05 --anneal-gens 40
+```
+
+The schedule is saved in checkpoints, so a resumed run carried past its original
+length keeps the schedule it started with rather than stretching it.
 
 ### Unreachable branches
 
@@ -287,14 +311,21 @@ ones that matter most:
 | `--games` | 12 | boards per generation, shared by every opponent, each played from both sides |
 | `--seed` | 1 | with the saved opponents, the whole run is reproducible from this |
 | `--depth` | 6 | maximum tree depth |
-| `--mutation` | 0.15 | per-node chance of mutation when a child is made |
+| `--mutation` | 0.15 | per-node chance of mutation in the first bred generation |
+| `--mutation-end` | `--mutation` | mutation chance once annealing is done |
+| `--anneal` | geometric | `linear` or `geometric` path from start to end rate |
+| `--anneal-gens` | `--gens` | generations the anneal takes |
+| `--mutation-mix` | threshold=4,feature=2,nudge=3,replace=2,structure=1 | relative odds of each kind of mutation |
+| `--crossover` | 1 | per-tree chance a child is crossed rather than copied |
+| `--survivors` | 0.5 | fraction of the ranking that breeds |
+| `--tournament` | 2 | survivors drawn per parent pick; higher favours the leaders |
 | `--elites` | 2 | best genomes carried over untouched |
 | `--playoff` | 50 | boards in the final playoff between generation leaders |
 | `--every` | 10 | checkpoint interval; 0 writes only the last |
 | `--resume` | — | carry on from a checkpoint |
 | `--save-as` | — | save the champion under this name without asking |
 | `--out-dir` | `artifacts` | where runs and saved opponents live |
-| `--run-id` | from the settings | names this run's directory |
+| `--run-id` | from the settings | names this run's directory; breeding settings that differ from the defaults are included |
 
 ## Known limits
 

@@ -23,8 +23,8 @@ import { BASELINE_OPPONENTS } from './opponents'
 import type { Opponent } from './opponents'
 import { makeRng, seedFrom } from './rng'
 import type { Rng } from './rng'
-import { crossover, mutate } from './tree'
-import type { Tree } from './tree'
+import { DEFAULT_MUTATION_WEIGHTS, crossover, mutate } from './tree'
+import type { MutationWeights, Tree, TreeSpec } from './tree'
 import { runGauntlet } from './tournament'
 import type { Benchmark, Standing } from './tournament'
 
@@ -40,10 +40,41 @@ export interface EvolveOptions {
   seed?: number
   roundCap?: number
   maxDepth?: number
-  /** Per-node chance of mutation when a child is made. */
+  /**
+   * Per-node chance of mutation when a child is made, in the first bred
+   * generation. It anneals toward `finalMutationRate` (see `mutationRateAt`).
+   */
   mutationRate?: number
+  /** The mutation rate once annealing is done. Defaults to `mutationRate`: no annealing. */
+  finalMutationRate?: number
+  /**
+   * How the rate moves from start to finish: `linear` in equal steps, `geometric`
+   * by an equal factor each generation, so it falls fast early and gently late.
+   */
+  annealShape?: AnnealShape
+  /**
+   * Generations the rate takes to reach `finalMutationRate`, holding there after.
+   * Defaults to the run's length.
+   */
+  annealGenerations?: number
+  /**
+   * Relative odds of each kind of change when a node mutates: nudging a
+   * threshold, repointing a branch at another feature, nudging or replacing a
+   * leaf, or regrowing a subtree.
+   */
+  mutationWeights?: MutationWeights
+  /**
+   * Per-tree chance that a child's tree is crossed over from both parents; the
+   * rest are copied from the first parent before mutation.
+   */
+  crossoverRate?: number
   /** Fraction of the ranking that reproduces — the brief's top 50%. */
   survivorFraction?: number
+  /**
+   * Survivors drawn per parent pick, the best of them winning. 1 picks among the
+   * survivors uniformly; higher leans harder on the top of the ranking.
+   */
+  tournamentSize?: number
   /** Best genomes carried into the next generation untouched. */
   elites?: number
   /** Boards in the final playoff between the generations' leaders. */
@@ -51,6 +82,9 @@ export interface EvolveOptions {
   /** The fixed commanders every genome is scored against. */
   opponents?: readonly Opponent[]
 }
+
+export type AnnealShape = 'linear' | 'geometric'
+export const ANNEAL_SHAPES: readonly AnnealShape[] = ['linear', 'geometric']
 
 export interface ResolvedOptions extends Required<Omit<EvolveOptions, 'opponents'>> {
   opponents: readonly Opponent[]
@@ -64,14 +98,68 @@ export const DEFAULTS: ResolvedOptions = {
   roundCap: DEFAULT_ROUND_CAP,
   maxDepth: 6,
   mutationRate: 0.15,
+  finalMutationRate: 0.15,
+  annealShape: 'geometric',
+  annealGenerations: 20,
+  mutationWeights: DEFAULT_MUTATION_WEIGHTS,
+  crossoverRate: 1,
   survivorFraction: 0.5,
+  tournamentSize: 2,
   elites: 2,
   playoffGames: 50,
   opponents: BASELINE_OPPONENTS,
 }
 
+/** What is wrong with a set of breeding settings, or null when nothing is. */
+export function breedingProblem(options: ResolvedOptions): string | null {
+  const { mutationRate, finalMutationRate, annealShape, annealGenerations } = options
+  const { crossoverRate, survivorFraction, tournamentSize } = options
+  const w = options.mutationWeights
+  if (!(mutationRate >= 0 && mutationRate <= 1)) return 'mutation rate must be in [0, 1]'
+  if (!(finalMutationRate >= 0 && finalMutationRate <= 1)) {
+    return 'final mutation rate must be in [0, 1]'
+  }
+  if (!ANNEAL_SHAPES.includes(annealShape)) {
+    return `anneal shape must be one of ${ANNEAL_SHAPES.join(', ')}`
+  }
+  if (annealShape === 'geometric' && mutationRate !== finalMutationRate) {
+    if (mutationRate === 0 || finalMutationRate === 0) {
+      return 'geometric annealing cannot start or end at a rate of 0; use linear'
+    }
+  }
+  if (!(Number.isInteger(annealGenerations) && annealGenerations >= 1)) {
+    return 'anneal generations must be a whole number of at least 1'
+  }
+  if (!(crossoverRate >= 0 && crossoverRate <= 1)) return 'crossover rate must be in [0, 1]'
+  if (!(survivorFraction > 0 && survivorFraction <= 1)) {
+    return 'survivor fraction must be in (0, 1]'
+  }
+  if (!(Number.isInteger(tournamentSize) && tournamentSize >= 1)) {
+    return 'tournament size must be a whole number of at least 1'
+  }
+  if (Object.values(w).some((weight) => !(weight >= 0))) {
+    return 'mutation weights must be zero or more'
+  }
+  if (w.threshold + w.feature + w.structure <= 0) {
+    return 'mutation weights give a branch nothing to do: raise threshold, feature or structure'
+  }
+  if (w.nudge + w.replace + w.structure <= 0) {
+    return 'mutation weights give a leaf nothing to do: raise nudge, replace or structure'
+  }
+  return null
+}
+
 export function resolveOptions(options: EvolveOptions = {}): ResolvedOptions {
-  return { ...DEFAULTS, ...options }
+  const merged = { ...DEFAULTS, ...options }
+  // both follow the run's own settings rather than the defaults', unless named
+  const resolved = {
+    ...merged,
+    finalMutationRate: options.finalMutationRate ?? merged.mutationRate,
+    annealGenerations: options.annealGenerations ?? merged.generations,
+  }
+  const problem = breedingProblem(resolved)
+  if (problem) throw new Error(problem)
+  return resolved
 }
 
 export interface GenerationReport {
@@ -85,6 +173,8 @@ export interface GenerationReport {
   rounds: number
   /** Mean total nodes across a genome's five trees. */
   nodes: number
+  /** The per-node mutation rate that bred this generation (see `mutationRateAt`). */
+  mutation: number
   /** The leader's results against each opponent, in the options' order. */
   against: Benchmark[]
 }
@@ -113,6 +203,45 @@ export function initialPopulation(
 }
 
 /**
+ * The per-node mutation rate that breeds `generation`: `mutationRate` for
+ * generation 1, moving to `finalMutationRate` by generation `annealGenerations`
+ * and holding there. Generation zero is drawn at random and reports the start.
+ */
+export function mutationRateAt(
+  generation: number,
+  options: Pick<
+    ResolvedOptions,
+    'mutationRate' | 'finalMutationRate' | 'annealShape' | 'annealGenerations'
+  >,
+): number {
+  const { mutationRate: start, finalMutationRate: end, annealGenerations } = options
+  const span = annealGenerations - 1
+  const progress = span > 0 ? Math.min(1, Math.max(0, (generation - 1) / span)) : 1
+  if (start === end) return start
+  if (options.annealShape === 'linear') return start + (end - start) * progress
+  return start * (end / start) ** progress
+}
+
+/** How much a child may differ from its parents. */
+export type Variation = Pick<
+  ResolvedOptions,
+  'mutationRate' | 'mutationWeights' | 'crossoverRate'
+>
+
+/** Cross two trees with probability `rate`, otherwise copy the first. */
+function maybeCross<L>(
+  a: Tree<L>,
+  b: Tree<L>,
+  spec: TreeSpec<L>,
+  rng: Rng,
+  rate: number,
+): Tree<L> {
+  // `mutate` rebuilds every node, so handing back the parent's tree shares nothing
+  if (!rng.chance(rate)) return a
+  return crossover(a, b, spec, rng)
+}
+
+/**
  * One child from two parents: each of the five trees is crossed over on its own,
  * then mutated. Crossing tree by tree keeps a good cavalry tree intact while the
  * infantry tree is recombined.
@@ -124,27 +253,31 @@ export function breed(
   generation: number,
   rng: Rng,
   specs: GenomeSpecs,
-  mutationRate: number,
+  variation: Variation,
 ): Genome {
+  const { mutationRate, mutationWeights, crossoverRate } = variation
   const units = {} as Record<UnitType, Tree<RoundOrder>>
   for (const type of UNIT_TYPES) {
-    const crossed = crossover(a.units[type], b.units[type], specs.unit, rng)
-    units[type] = mutate(crossed, specs.unit, rng, mutationRate)
+    const crossed = maybeCross(a.units[type], b.units[type], specs.unit, rng, crossoverRate)
+    units[type] = mutate(crossed, specs.unit, rng, mutationRate, mutationWeights)
   }
   const army = mutate(
-    crossover(a.army, b.army, specs.army, rng),
+    maybeCross(a.army, b.army, specs.army, rng, crossoverRate),
     specs.army,
     rng,
     mutationRate,
+    mutationWeights,
   )
   return { id, generation, army, units }
 }
 
-/** Binary tournament over the survivors: two draws, the better rank wins. */
-function pickParent(survivors: Standing[], rng: Rng): Genome {
-  const a = rng.int(survivors.length)
-  const b = rng.int(survivors.length)
-  return survivors[Math.min(a, b)].genome
+/** Tournament selection over the survivors: `size` draws, the best rank wins. */
+function pickParent(survivors: Standing[], rng: Rng, size: number): Genome {
+  let best = rng.int(survivors.length)
+  for (let draw = 1; draw < size; draw += 1) {
+    best = Math.min(best, rng.int(survivors.length))
+  }
+  return survivors[best].genome
 }
 
 /**
@@ -169,23 +302,15 @@ export function nextGeneration(
     .slice(0, elites)
     .map((standing) => standing.genome)
 
+  const variation = { ...options, mutationRate: mutationRateAt(generation, options) }
   let child = 1
   while (population.length < options.populationSize) {
-    const a = pickParent(survivors, rng)
-    let b = pickParent(survivors, rng)
+    const size = options.tournamentSize
+    const a = pickParent(survivors, rng, size)
+    let b = pickParent(survivors, rng, size)
     // one parent asexually is a mutation-only child, which is fine but wasteful
-    if (b === a && survivors.length > 1) b = pickParent(survivors, rng)
-    population.push(
-      breed(
-        a,
-        b,
-        `g${generation}-${child}`,
-        generation,
-        rng,
-        specs,
-        options.mutationRate,
-      ),
-    )
+    if (b === a && survivors.length > 1) b = pickParent(survivors, rng, size)
+    population.push(breed(a, b, `g${generation}-${child}`, generation, rng, specs, variation))
     child += 1
   }
 
@@ -219,7 +344,11 @@ function mean(values: number[]): number {
   return values.reduce((total, value) => total + value, 0) / values.length
 }
 
-function report(generation: number, standings: Standing[]): GenerationReport {
+function report(
+  generation: number,
+  standings: Standing[],
+  options: ResolvedOptions,
+): GenerationReport {
   const leader = standings[0]
   return {
     generation,
@@ -229,6 +358,7 @@ function report(generation: number, standings: Standing[]): GenerationReport {
     bestId: leader.genome.id,
     rounds: mean(standings.map((standing) => standing.rounds)),
     nodes: mean(standings.map((standing) => genomeSize(standing.genome))),
+    mutation: mutationRateAt(generation, options),
     against: leader.against,
   }
 }
@@ -271,7 +401,7 @@ export function startRun(
   return {
     generation: 0,
     standings,
-    reports: [report(0, standings)],
+    reports: [report(0, standings, options)],
     winners: withLeader([], standings),
     rng,
   }
@@ -299,7 +429,7 @@ export function stepRun(
   return {
     generation,
     standings,
-    reports: [...state.reports, report(generation, standings)],
+    reports: [...state.reports, report(generation, standings, options)],
     winners: withLeader(state.winners, standings),
     rng: state.rng,
   }

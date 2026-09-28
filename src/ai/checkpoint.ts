@@ -13,13 +13,13 @@
 import { UNIT_TYPES } from '../prototypes/tactical/model'
 import type { RoundOrder, UnitType } from '../prototypes/tactical/model'
 import { resolveOptions } from './evolve'
-import type { GenerationReport, ResolvedOptions, RunState } from './evolve'
+import type { AnnealShape, GenerationReport, ResolvedOptions, RunState } from './evolve'
 import type { Genome } from './genome'
 import { fromOpponentRecord, toOpponentRecord } from './opponents'
 import type { OpponentRecord } from './opponents'
 import { rngFromState } from './rng'
 import type { Benchmark, Standing } from './tournament'
-import type { Tree } from './tree'
+import type { MutationWeights, Tree } from './tree'
 
 /**
  * Bumped when the shape below changes in a way older files cannot be read as.
@@ -53,7 +53,13 @@ export interface CheckpointOptions {
   roundCap: number
   maxDepth: number
   mutationRate: number
+  finalMutationRate: number
+  annealShape: AnnealShape
+  annealGenerations: number
+  mutationWeights: MutationWeights
+  crossoverRate: number
   survivorFraction: number
+  tournamentSize: number
   elites: number
   playoffGames: number
   opponents: OpponentRecord[]
@@ -87,7 +93,13 @@ export function serializeOptions(options: ResolvedOptions): CheckpointOptions {
     roundCap: options.roundCap,
     maxDepth: options.maxDepth,
     mutationRate: options.mutationRate,
+    finalMutationRate: options.finalMutationRate,
+    annealShape: options.annealShape,
+    annealGenerations: options.annealGenerations,
+    mutationWeights: { ...options.mutationWeights },
+    crossoverRate: options.crossoverRate,
     survivorFraction: options.survivorFraction,
+    tournamentSize: options.tournamentSize,
     elites: options.elites,
     playoffGames: options.playoffGames,
     opponents: options.opponents.map(toOpponentRecord),
@@ -182,6 +194,17 @@ function asNumber(value: unknown, what: string): number {
 function asString(value: unknown, what: string): string {
   if (typeof value !== 'string') fail(`${what} is not a string`)
   return value
+}
+
+function parseWeights(value: unknown, what: string): MutationWeights {
+  const record = asRecord(value, what)
+  return {
+    threshold: asNumber(record.threshold, `${what}.threshold`),
+    feature: asNumber(record.feature, `${what}.feature`),
+    nudge: asNumber(record.nudge, `${what}.nudge`),
+    replace: asNumber(record.replace, `${what}.replace`),
+    structure: asNumber(record.structure, `${what}.structure`),
+  }
 }
 
 function asList(value: unknown, what: string): unknown[] {
@@ -305,7 +328,13 @@ export function parseCheckpoint(value: unknown): Checkpoint {
       roundCap: asNumber(options.roundCap, 'options.roundCap'),
       maxDepth: asNumber(options.maxDepth, 'options.maxDepth'),
       mutationRate: asNumber(options.mutationRate, 'options.mutationRate'),
+      finalMutationRate: asNumber(options.finalMutationRate, 'options.finalMutationRate'),
+      annealShape: asString(options.annealShape, 'options.annealShape') as AnnealShape,
+      annealGenerations: asNumber(options.annealGenerations, 'options.annealGenerations'),
+      mutationWeights: parseWeights(options.mutationWeights, 'options.mutationWeights'),
+      crossoverRate: asNumber(options.crossoverRate, 'options.crossoverRate'),
       survivorFraction: asNumber(options.survivorFraction, 'options.survivorFraction'),
+      tournamentSize: asNumber(options.tournamentSize, 'options.tournamentSize'),
       elites: asNumber(options.elites, 'options.elites'),
       playoffGames: asNumber(options.playoffGames, 'options.playoffGames'),
       opponents,
@@ -375,6 +404,7 @@ export function curveCsv(reports: GenerationReport[]): string {
     'worst',
     'rounds',
     'nodes',
+    'mutation',
     ...opponents.flatMap((opponent) => [`${opponent}.winRate`, `${opponent}.differential`]),
   ]
   const rows = reports.map((report) =>
@@ -385,6 +415,7 @@ export function curveCsv(reports: GenerationReport[]): string {
       report.worst,
       report.rounds,
       report.nodes,
+      report.mutation,
       ...report.against.flatMap((mark) => [mark.winRate, mark.differential]),
     ].join(','),
   )
