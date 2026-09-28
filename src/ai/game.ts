@@ -13,7 +13,7 @@ import { rosterOf } from './roster'
 import type { Roster } from './roster'
 import type { Commander } from './commander'
 import { deploy } from './scenario'
-import type { Scenario } from './scenario'
+import type { Objective, Scenario } from './scenario'
 import { seededD6 } from './rng'
 import type { Rng } from './rng'
 
@@ -27,20 +27,28 @@ export const DEFAULT_ROUND_CAP = 30
  */
 const STALE_LIMIT = 3
 
-/** How much of the score the surviving-strength differential is worth. */
-export const DIFFERENTIAL_WEIGHT = 0.25
+/**
+ * How much of the score the surviving-strength differential is worth. At 0.5 the
+ * best possible loss only ties the worst possible win, so a win never ranks below
+ * a loss.
+ */
+export const DIFFERENTIAL_WEIGHT = 0.5
 
 export interface GameOutcome {
   /** Rounds actually resolved. */
   rounds: number
   /**
-   * The side that broke the other. There are no draws: a game the attacker does
-   * not win outright — called off, or both sides wiped at once — goes to the
-   * defender.
+   * The side that met the scenario's objective. There are no draws: in `hold` the
+   * attacker wins only by wiping the defender out, in `deathmatch` the side that
+   * removed more enemy units wins, and every other ending goes to the defender.
    */
   winner: Side
   /** The scenario's attacker. */
   attacker: Side
+  /** The scenario's objective. */
+  objective: Objective
+  /** Enemy units each side removed. */
+  kills: Record<Side, number>
   /** Surviving strength each side kept, as a fraction of what it deployed. */
   strength: Record<Side, number>
   /** `strength.player - strength.enemy`, in [-1, 1]. */
@@ -103,9 +111,10 @@ export function playGame(
     }
 
     const before = positionsOf(board)
+    const { attacker, objective } = scenario
     const orders = {
-      ...player.orders(board, 'player', round, roster, scenario.attacker),
-      ...enemy.orders(board, 'enemy', round, roster, scenario.attacker),
+      ...player.orders(board, 'player', round, roster, attacker, objective),
+      ...enemy.orders(board, 'enemy', round, roster, attacker, objective),
     }
     const result = resolveRound(board, orders, roll)
     options.onRound?.({ round, before: board, orders, result })
@@ -129,15 +138,23 @@ export function playGame(
     player: strengthOf(board, 'player', roster.player),
     enemy: strengthOf(board, 'enemy', roster.enemy),
   }
-  const { attacker } = scenario
+  const kills = {
+    player: roster.enemy - livingCount(board, 'enemy'),
+    enemy: roster.player - livingCount(board, 'player'),
+  }
+  const { attacker, objective } = scenario
   const defender: Side = attacker === 'player' ? 'enemy' : 'player'
-  const attackerBroke =
-    livingCount(board, attacker) > 0 && livingCount(board, defender) === 0
+  const attackerWon =
+    objective === 'hold'
+      ? livingCount(board, attacker) > 0 && livingCount(board, defender) === 0
+      : kills[attacker] > kills[defender]
 
   return {
     rounds,
-    winner: attackerBroke ? attacker : defender,
+    winner: attackerWon ? attacker : defender,
     attacker,
+    objective,
+    kills,
     strength,
     differential: strength.player - strength.enemy,
     timedOut,

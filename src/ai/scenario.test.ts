@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import { hexDistance } from '../engine'
 import { BOARD_ROWS, UNIT_TYPES, boardTiles } from '../prototypes/tactical/model'
+import type { UnitState } from '../prototypes/tactical/model'
 import { isOnBoard } from '../prototypes/tactical/sim'
 import { makeRng } from './rng'
 import {
   DEPLOY_ROWS,
   MAX_ROSTER,
   MIN_ROSTER,
+  MUSTERS,
+  OBJECTIVES,
   deploy,
   deploymentZone,
   mirrorHex,
@@ -66,22 +69,54 @@ describe('randomScenario', () => {
     expect(randomScenario(makeRng(5))).toEqual(randomScenario(makeRng(5)))
   })
 
-  it('gives both sides the same mix of types', () => {
+  const mixOf = (units: UnitState[], side: string) =>
+    units.filter((unit) => unit.side === side).map((unit) => unit.type).sort()
+
+  it('gives both sides the same mix of types in a mirrored muster', () => {
     for (let seed = 0; seed < 40; seed += 1) {
-      const { units } = randomScenario(makeRng(seed))
-      const types = (side: string) =>
-        units.filter((unit) => unit.side === side).map((unit) => unit.type).sort()
-      expect(types('player')).toEqual(types('enemy'))
+      const { units } = randomScenario(makeRng(seed), { muster: 'mirrored' })
+      expect(mixOf(units, 'player')).toEqual(mixOf(units, 'enemy'))
+    }
+  })
+
+  it('gives each side a mix of its own, the same size, in an asymmetric muster', () => {
+    for (let seed = 0; seed < 40; seed += 1) {
+      const { units } = randomScenario(makeRng(seed), { muster: 'asymmetric' })
+      const player = mixOf(units, 'player')
+      const enemy = mixOf(units, 'enemy')
+      expect(enemy.length).toBe(player.length)
+      expect(enemy).not.toEqual(player)
     }
   })
 
   it('mirrors the deployment unit for unit', () => {
-    const { units } = randomScenario(makeRng(11))
-    const half = units.length / 2
-    for (let index = 0; index < half; index += 1) {
-      expect(units[half + index].pos).toEqual(mirrorHex(units[index].pos))
-      expect(units[half + index].type).toBe(units[index].type)
+    for (const muster of ['mirrored', 'asymmetric'] as const) {
+      const { units } = randomScenario(makeRng(11), { muster })
+      const half = units.length / 2
+      for (let index = 0; index < half; index += 1) {
+        expect(units[half + index].pos).toEqual(mirrorHex(units[index].pos))
+        if (muster === 'mirrored') {
+          expect(units[half + index].type).toBe(units[index].type)
+        }
+      }
     }
+  })
+
+  it('draws every objective and every muster', () => {
+    const drawn = Array.from({ length: 40 }, (_, seed) => randomScenario(makeRng(seed)))
+    expect(new Set(drawn.map((scenario) => scenario.objective))).toEqual(
+      new Set(OBJECTIVES),
+    )
+    expect(new Set(drawn.map((scenario) => scenario.muster))).toEqual(new Set(MUSTERS))
+  })
+
+  it('honours a pinned objective and muster without moving the board', () => {
+    const free = randomScenario(makeRng(9), { muster: 'mirrored' })
+    const pinned = randomScenario(makeRng(9), { objective: 'deathmatch', muster: 'mirrored' })
+    expect(pinned.objective).toBe('deathmatch')
+    expect(pinned.muster).toBe('mirrored')
+    expect(pinned.units).toEqual(free.units)
+    expect(pinned.attacker).toBe(free.attacker)
   })
 
   it('deploys a legal roster on legal, unshared hexes', () => {

@@ -36,6 +36,7 @@ import type { Tree, TreeSpec } from './tree'
 import type { Commander } from './commander'
 import type { Roster } from './roster'
 import type { Rng } from './rng'
+import type { Objective } from './scenario'
 
 /**
  * Longest root-to-leaf path in a tree — deep enough for real tactics, shallow
@@ -158,12 +159,19 @@ export function ordersFor(
   round: number,
   roster: Roster,
   attacker: Side,
+  objective: Objective,
 ): OrderBook {
-  const posture = postureFor(genome, board, side, round, roster, attacker)
+  const posture = postureFor(genome, board, side, round, roster, attacker, objective)
   const orders: OrderBook = {}
   for (const unit of board) {
     if (unit.side !== side || !isAlive(unit)) continue
-    const features = unitFeatures(unit, board, { round, posture, roster, attacker })
+    const features = unitFeatures(unit, board, {
+      round,
+      posture,
+      roster,
+      attacker,
+      objective,
+    })
     orders[unit.id] = legalOrder(evaluate(genome.units[unit.type], features), unit)
   }
   return orders
@@ -177,16 +185,20 @@ export function postureFor(
   round: number,
   roster: Roster,
   attacker: Side,
+  objective: Objective,
 ): number {
-  return evaluate(genome.army, armyFeatures(board, side, { round, roster, attacker }))
+  return evaluate(
+    genome.army,
+    armyFeatures(board, side, { round, roster, attacker, objective }),
+  )
 }
 
 /** A genome as something a game can hand a side to. */
 export function commanderOf(genome: Genome): Commander {
   return {
     id: genome.id,
-    orders: (board, side, round, roster, attacker) =>
-      ordersFor(genome, board, side, round, roster, attacker),
+    orders: (board, side, round, roster, attacker, objective) =>
+      ordersFor(genome, board, side, round, roster, attacker, objective),
   }
 }
 

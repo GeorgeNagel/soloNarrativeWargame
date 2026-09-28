@@ -29,10 +29,10 @@ on, so an army can coordinate a general advance or a refused flank without any o
 that being written in by hand. Nothing forces a lineage to use it.
 
 Both kinds of tree also see **`attacking`**: 1 when the genome's side is the
-scenario's attacker and must break the other side to win, 0 when it is the
-defender and only has to survive. A called-off game goes to the defender, so the
-same army may want to advance in one role and stand in the other, and this flag
-lets a genome learn both from one set of trees.
+scenario's attacker, 0 when it is the defender, and **`deathmatch`**: 1 when the
+scenario's objective is a deathmatch, 0 when it is a hold (see *A game*). The same
+army may want to advance in one role or objective and stand in another, and these
+flags let a genome learn all four from one set of trees.
 
 Every feature a tree may branch on is listed in `src/ai/features.ts`, each with
 the range its thresholds are drawn from. Thresholds always land between two steps
@@ -46,27 +46,43 @@ stream, so any game replays from its seed. A game ends when one side is wiped, a
 a 30-round cap, or after three rounds in which nothing moved, shot or fought,
 which is how two armies that both stand fast are called off early.
 
-**There are no draws.** Each scenario names an attacker, and the attacker wins
-only by wiping the defender out. Any other ending — the round cap, a stalemate,
-or both sides wiped in the same round — goes to the defender.
+**There are no draws.** Each scenario names an attacker and an objective:
 
-**Scoring** is a win or loss, plus a quarter of the surviving-strength
-differential, where strength is the fraction of its starting hit points a side
-still has on the board. The differential is what gives selection a gradient in
-the first generations, when nearly every game is called off and pure win rate
-would rank a population by who happened to defend. It separates two genomes that
-both held, or both failed to break through, by how much each kept.
+- **Hold.** The attacker wins only by wiping the defender out. Any other ending —
+  the round cap, a stalemate, or both sides wiped in the same round — goes to the
+  defender.
+- **Deathmatch.** When the game ends, the side that removed more enemy units wins.
+  A tie, including a game where nobody lost a unit, goes to the defender.
+
+**Scoring** is a win or loss, plus half the surviving-strength differential,
+where strength is the fraction of its starting hit points a side still has on the
+board. A win that costs nothing therefore pays more than one that costs nearly
+everything. At half, the best possible loss only ties the worst possible win, so a
+loss never outranks a win. The differential is also what gives selection a
+gradient in the first generations, when nearly every game is called off and pure
+win rate would rank a population by who happened to defend. It separates two
+genomes that both held, or both failed to break through, by how much each kept.
 
 ## A scenario
 
 Rosters and deployments are drawn per game: 3–10 units a side, each a random type,
-deployed in the two rows nearest that side's own edge. Both sides get the **same**
-mix of types, and the enemy deployment is the player's reflected through the
+deployed in the two rows nearest that side's own edge. Both sides get the same
+number of units, and the enemy deployment is the player's reflected through the
 board's centre — the shape the hand-written St. Aubin Ford scenario already has.
-That reflection preserves every distance on the board, so swapping sides is an
-exact rematch and a win says something about the AI rather than about the draw.
-The attacker is drawn per scenario too; since the gauntlet plays each scenario
-from both sides, every genome attacks and defends equally often.
+That reflection preserves every distance on the board.
+
+The **muster** is drawn per scenario, even odds:
+
+- **Mirrored.** Both sides get the same mix of types, so swapping sides is an
+  exact rematch.
+- **Asymmetric.** Each side's mix is drawn on its own (redrawn if it comes out the
+  same), so one army may be heavy in cavalry and the other in archers.
+
+The attacker and the objective are drawn per scenario too, the objective at even
+odds between hold and deathmatch. Since the gauntlet plays each scenario from both
+sides, every genome attacks and defends equally often, and in an asymmetric
+muster commands each army once, so a win still says something about the AI rather
+than about the draw.
 
 On the 14×14 board, with an even number of rows, the reflection maps every hex
 onto another hex of the board. An odd-sized board is not closed under it — the

@@ -40,7 +40,7 @@ const USAGE = `Usage: npm run ai:play -- --genome PATH [flags]
                  name | a path to another genome (default ${BASELINES[0].id})
   --games N      scenarios to measure, each played from both sides (default 20)
   --seed N       seed for the scenarios and the dice (default 7)
-  --cap N        rounds before a game goes to the defender (default ${DEFAULT_ROUND_CAP})
+  --cap N        rounds before a game is called off (default ${DEFAULT_ROUND_CAP})
   --size N       pin the roster size instead of drawing it
   --trace        print one game round by round
   --describe     print the genome's trees
@@ -196,7 +196,8 @@ function main(): void {
     const roster = rosterOf(scenario.units)
     say(
       `tracing one game: ${genome.id} (player) against ${opponent.id} (enemy), ` +
-        `${roster.player} units a side, ${scenario.attacker} attacking, scenario seed ${seed}`,
+        `${roster.player} units a side (${scenario.muster}), ${scenario.objective}, ` +
+        `${scenario.attacker} attacking, scenario seed ${seed}`,
     )
     const outcome = playGame(
       commanderOf(genome),
@@ -214,6 +215,7 @@ function main(): void {
               trace.round,
               roster,
               scenario.attacker,
+              scenario.objective,
             ),
             // a baseline has no posture of its own; showing the subject's read of
             // the enemy side would be a lie, so it is left at zero
@@ -226,6 +228,7 @@ function main(): void {
     say(
       `result: ${outcome.winner} after ${outcome.rounds} rounds` +
         `${outcome.winner === outcome.attacker ? '' : ' (held)'} — ` +
+        `removed ${outcome.kills.player} vs ${outcome.kills.enemy}, ` +
         `strength ${num(outcome.strength.player)} vs ${num(outcome.strength.enemy)}`,
     )
     say('')

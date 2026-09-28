@@ -6,6 +6,7 @@
  */
 import type { OrderBook, Side, UnitState } from '../prototypes/tactical/model'
 import type { Roster } from './roster'
+import type { Objective } from './scenario'
 
 export interface Commander {
   /** Short label for reports. */
@@ -13,7 +14,8 @@ export interface Commander {
   /**
    * This side's whole order book for the round. Only this side's living units
    * belong in it, so two commanders' books merge into the one a round takes.
-   * `attacker` is the side that must break the other to win.
+   * `attacker` is the side the scenario's `objective` asks to break the other;
+   * ties and stalemates go to the defender.
    */
   orders(
     board: UnitState[],
@@ -21,5 +23,6 @@ export interface Commander {
     round: number,
     roster: Roster,
     attacker: Side,
+    objective: Objective,
   ): OrderBook
 }

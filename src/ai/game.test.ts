@@ -12,9 +12,10 @@ import { commanderOf, ordersFor, randomGenome } from './genome'
 import { makeRng, seedFrom } from './rng'
 import { rosterOf } from './roster'
 import { deploy, randomScenario } from './scenario'
+import type { Objective } from './scenario'
 
-function scenarioFor(seed: number) {
-  return randomScenario(makeRng(seed), { seed })
+function scenarioFor(seed: number, objective?: Objective) {
+  return randomScenario(makeRng(seed), { seed, ...(objective ? { objective } : {}) })
 }
 
 describe('playGame', () => {
@@ -38,9 +39,9 @@ describe('playGame', () => {
     expect(once).toEqual(twice)
   })
 
-  it('gives the attacker a win only when it broke the defender', () => {
+  it('gives the attacker a hold only when it broke the defender', () => {
     for (let seed = 0; seed < 30; seed += 1) {
-      const scenario = scenarioFor(seed)
+      const scenario = scenarioFor(seed, 'hold')
       const outcome = playGame(closeOnNearest, closeOnNearest, scenario, makeRng(seed))
       expect(outcome.attacker).toBe(scenario.attacker)
       if (outcome.winner === outcome.attacker) {
@@ -85,6 +86,44 @@ describe('playGame', () => {
     }
   })
 
+  it('gives a deathmatch to the side that removed more, and a tie to the defender', () => {
+    let attackerWins = 0
+    for (let seed = 0; seed < 30; seed += 1) {
+      const scenario = scenarioFor(seed, 'deathmatch')
+      const outcome = playGame(closeOnNearest, closeOnNearest, scenario, makeRng(seed))
+      const { attacker } = outcome
+      const defender = attacker === 'player' ? 'enemy' : 'player'
+      expect(outcome.objective).toBe('deathmatch')
+      expect(outcome.winner).toBe(
+        outcome.kills[attacker] > outcome.kills[defender] ? attacker : defender,
+      )
+      if (outcome.winner === attacker) attackerWins += 1
+    }
+    // closing armies trade blows, so the attacker should take some of them
+    expect(attackerWins).toBeGreaterThan(0)
+  })
+
+  it('gives a bloodless deathmatch to the defender', () => {
+    for (const attacker of ['player', 'enemy'] as const) {
+      const scenario = { ...scenarioFor(6, 'deathmatch'), attacker }
+      const outcome = playGame(holdFast, holdFast, scenario, makeRng(6))
+      expect(outcome.kills).toEqual({ player: 0, enemy: 0 })
+      expect(outcome.winner).toBe(attacker === 'player' ? 'enemy' : 'player')
+    }
+  })
+
+  it('counts the units each side removed', () => {
+    for (let seed = 0; seed < 20; seed += 1) {
+      const scenario = scenarioFor(seed)
+      const outcome = playGame(closeOnNearest, closeOnNearest, scenario, makeRng(seed))
+      for (const side of ['player', 'enemy'] as const) {
+        const foe = side === 'player' ? 'enemy' : 'player'
+        expect(outcome.kills[side]).toBeGreaterThanOrEqual(0)
+        expect(outcome.kills[side]).toBeLessThanOrEqual(outcome.roster[foe])
+      }
+    }
+  })
+
   it('honours a shorter round cap', () => {
     const outcome = playGame(
       closeOnNearest,
@@ -112,6 +151,8 @@ describe('scoreFor', () => {
       rounds: 5,
       winner,
       attacker: 'player',
+      objective: 'hold',
+      kills: { player: 0, enemy: 0 },
       strength: { player: 0, enemy: 0 },
       differential,
       timedOut: false,
@@ -128,9 +169,19 @@ describe('scoreFor', () => {
     }
   })
 
-  it('pays a win more than a loss, whatever the differential', () => {
-    expect(scoreFor(outcome('player', -1), 'player')).toBeGreaterThan(
+  it('never pays a loss more than a win, whatever the differential', () => {
+    // at the extremes the best loss only ties the worst win
+    expect(scoreFor(outcome('player', -1), 'player')).toBeGreaterThanOrEqual(
       scoreFor(outcome('enemy', 1), 'player'),
+    )
+    expect(scoreFor(outcome('player', -0.9), 'player')).toBeGreaterThan(
+      scoreFor(outcome('enemy', 0.9), 'player'),
+    )
+  })
+
+  it('pays a flawless win more than a costly one', () => {
+    expect(scoreFor(outcome('player', 1), 'player')).toBeGreaterThan(
+      scoreFor(outcome('player', 1 / 6), 'player'),
     )
   })
 
@@ -170,9 +221,9 @@ describe('the orders a commander writes', () => {
       const genome = randomGenome('g', makeRng(seedFrom(seed, 3)))
       for (const side of ['player', 'enemy'] as const) {
         const books = [
-          ordersFor(genome, board, side, 1, roster, 'player'),
-          closeOnNearest.orders(board, side, 1, roster, 'player'),
-          holdFast.orders(board, side, 1, roster, 'player'),
+          ordersFor(genome, board, side, 1, roster, 'player', 'hold'),
+          closeOnNearest.orders(board, side, 1, roster, 'player', 'hold'),
+          holdFast.orders(board, side, 1, roster, 'player', 'hold'),
         ]
         for (const book of books) {
           legal(book as Record<string, unknown>, board)

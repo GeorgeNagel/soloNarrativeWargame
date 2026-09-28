@@ -58,7 +58,7 @@ const USAGE = `Usage: npm run evolve -- [flags]
   --depth N        maximum tree depth (default ${DEFAULTS.maxDepth})
   --mutation P     per-node mutation chance (default ${DEFAULTS.mutationRate})
   --elites N       top genomes carried over untouched (default ${DEFAULTS.elites})
-  --cap N          rounds before a game goes to the defender (default ${DEFAULTS.roundCap})
+  --cap N          rounds before a game is called off (default ${DEFAULTS.roundCap})
   --playoff N      boards in the final playoff between generation leaders (default ${DEFAULTS.playoffGames})
   --out-dir DIR    where runs and saved opponents live (default artifacts)
   --run-id NAME    names this run's directory (default from the settings)

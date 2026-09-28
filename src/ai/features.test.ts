@@ -158,6 +158,7 @@ describe('unitFeatures', () => {
       posture: 2,
       roster: { player: 2, enemy: 1 },
       attacker: 'player',
+      objective: 'hold',
     })
     expect(features.foeRange).toBe(1)
     expect(features.adjacentEnemies).toBe(1)
@@ -177,6 +178,7 @@ describe('unitFeatures', () => {
       posture: 0,
       roster: { player: 2, enemy: 1 },
       attacker: 'player',
+      objective: 'hold',
     })
     for (const spec of UNIT_FEATURE_SPECS) {
       expect(Number.isFinite(features[spec.key])).toBe(true)
@@ -190,6 +192,7 @@ describe('unitFeatures', () => {
       posture: 0,
       roster: { player: 1, enemy: 1 },
       attacker: 'player',
+      objective: 'hold',
     })
     expect(features.canShoot).toBe(1)
     expect(features.shootTargets).toBe(1)
@@ -197,10 +200,16 @@ describe('unitFeatures', () => {
   })
 
   it('flags the attacking side and not the defending one', () => {
-    const ctx = { round: 1, posture: 0, roster: { player: 2, enemy: 1 } }
+    const ctx = { round: 1, posture: 0, roster: { player: 2, enemy: 1 }, objective: 'hold' as const }
     expect(unitFeatures(foot, [foot, foe], { ...ctx, attacker: 'player' }).attacking).toBe(1)
     expect(unitFeatures(foe, [foot, foe], { ...ctx, attacker: 'player' }).attacking).toBe(0)
     expect(unitFeatures(foot, [foot, foe], { ...ctx, attacker: 'enemy' }).attacking).toBe(0)
+  })
+
+  it('flags a deathmatch and not a hold', () => {
+    const ctx = { round: 1, posture: 0, roster: { player: 2, enemy: 1 }, attacker: 'player' as const }
+    expect(unitFeatures(foot, [foot, foe], { ...ctx, objective: 'deathmatch' }).deathmatch).toBe(1)
+    expect(unitFeatures(foot, [foot, foe], { ...ctx, objective: 'hold' }).deathmatch).toBe(0)
   })
 
   it('gives a lone unit a full strength ratio', () => {
@@ -209,6 +218,7 @@ describe('unitFeatures', () => {
       posture: 0,
       roster: { player: 1, enemy: 1 },
       attacker: 'player',
+      objective: 'hold',
     })
     expect(features.strengthRatio).toBeCloseTo(0.5, 10)
   })
@@ -222,7 +232,7 @@ describe('armyFeatures', () => {
   ]
 
   it('counts the armies and how close they are', () => {
-    const features = armyFeatures(board, 'player', { round: 2, roster: { player: 2, enemy: 1 }, attacker: 'player' })
+    const features = armyFeatures(board, 'player', { round: 2, roster: { player: 2, enemy: 1 }, attacker: 'player', objective: 'hold' })
     expect(features.friendsAlive).toBe(2)
     expect(features.foesAlive).toBe(1)
     expect(features.contacts).toBe(1)
@@ -233,20 +243,26 @@ describe('armyFeatures', () => {
   })
 
   it('carries a value for every key the army tree may branch on', () => {
-    const features = armyFeatures(board, 'enemy', { round: 1, roster: { player: 2, enemy: 1 }, attacker: 'player' })
+    const features = armyFeatures(board, 'enemy', { round: 1, roster: { player: 2, enemy: 1 }, attacker: 'player', objective: 'hold' })
     for (const spec of ARMY_FEATURE_SPECS) {
       expect(Number.isFinite(features[spec.key])).toBe(true)
     }
   })
 
   it('flags the attacking side and not the defending one', () => {
-    const ctx = { round: 1, roster: { player: 2, enemy: 1 } }
+    const ctx = { round: 1, roster: { player: 2, enemy: 1 }, objective: 'hold' as const }
     expect(armyFeatures(board, 'player', { ...ctx, attacker: 'player' }).attacking).toBe(1)
     expect(armyFeatures(board, 'enemy', { ...ctx, attacker: 'player' }).attacking).toBe(0)
   })
 
+  it('flags a deathmatch and not a hold', () => {
+    const ctx = { round: 1, roster: { player: 2, enemy: 1 }, attacker: 'player' as const }
+    expect(armyFeatures(board, 'player', { ...ctx, objective: 'deathmatch' }).deathmatch).toBe(1)
+    expect(armyFeatures(board, 'player', { ...ctx, objective: 'hold' }).deathmatch).toBe(0)
+  })
+
   it('does not divide by an army that is gone', () => {
-    const features = armyFeatures([], 'player', { round: 1, roster: ROSTER, attacker: 'player' })
+    const features = armyFeatures([], 'player', { round: 1, roster: ROSTER, attacker: 'player', objective: 'hold' })
     expect(features.meanRange).toBe(FAR)
     expect(features.strengthRatio).toBe(0.5)
   })
