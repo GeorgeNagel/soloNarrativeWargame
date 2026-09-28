@@ -14,6 +14,8 @@ import {
   armyFeatures,
   edgeToward,
   inRearArc,
+  offAxis,
+  openRearHexes,
   strengthOf,
   unitFeatures,
   wheelsBetween,
@@ -123,6 +125,26 @@ describe('inRearArc', () => {
   })
 })
 
+describe('openRearHexes and offAxis', () => {
+  const foe = unit('c', 'enemy', 'infantry', hex(3, 2), 'SW')
+
+  it('lists the empty hexes across the rear edges', () => {
+    const open = openRearHexes(foe, new Set())
+    expect(open).toHaveLength(3)
+    expect(open).toEqual(expect.arrayContaining([hex(4, 2), hex(4, 1), hex(3, 1)]))
+  })
+
+  it('leaves out a held hex', () => {
+    expect(openRearHexes(foe, new Set(['4,2']))).toHaveLength(2)
+  })
+
+  it('counts edges off the facing, from dead ahead to dead behind', () => {
+    expect(offAxis(foe, hex(1, 4))).toBe(0)
+    expect(offAxis(foe, hex(4, 2))).toBe(2)
+    expect(offAxis(foe, hex(5, 0))).toBe(3)
+  })
+})
+
 describe('strengthOf', () => {
   it('is one for an untouched side and zero for a dead one', () => {
     const board = [
@@ -224,6 +246,93 @@ describe('unitFeatures', () => {
   })
 })
 
+describe('unitFeatures against a standing line', () => {
+  const ctx = {
+    round: 1,
+    posture: 0,
+    roster: { player: 3, enemy: 3 },
+    attacker: 'player' as const,
+    objective: 'hold' as const,
+  }
+  // archers facing down the SW line that runs through (1, 4)
+  const bow = unit('e', 'enemy', 'archers', hex(3, 2), 'SW')
+
+  it('counts the shooters that have this hex in their cone', () => {
+    const foot = unit('a', 'player', 'infantry', hex(1, 4), 'NE')
+    expect(unitFeatures(foot, [foot, bow], ctx).threatShooters).toBe(1)
+    const aside = unit('a', 'player', 'infantry', hex(3, 4), 'NE')
+    expect(unitFeatures(aside, [aside, bow], ctx).threatShooters).toBe(0)
+  })
+
+  it('finds the longest advance that ends out of the cone', () => {
+    const wheeled = unit('a', 'player', 'infantry', hex(1, 4), 'E')
+    expect(unitFeatures(wheeled, [wheeled, bow], ctx).safeAdvance).toBe(2)
+  })
+
+  it('has no safe advance when every stop is in the cone', () => {
+    const foot = unit('a', 'player', 'infantry', hex(1, 4), 'NE')
+    expect(unitFeatures(foot, [foot, bow], ctx).safeAdvance).toBe(-1)
+  })
+
+  it('counts a standing target that cannot shoot back as free', () => {
+    const archers = unit('a', 'player', 'archers', hex(1, 4), 'E')
+    const foot = unit('f', 'enemy', 'infantry', hex(3, 2), 'SW')
+    const features = unitFeatures(archers, [archers, foot], ctx)
+    expect(features.freeTargets).toBe(1)
+    expect(features.freeWheels).toBe(-1)
+  })
+
+  it('does not count a target that has this unit in its cone', () => {
+    const archers = unit('a', 'player', 'archers', hex(1, 4), 'NE')
+    expect(unitFeatures(archers, [archers, bow], ctx).freeTargets).toBe(0)
+    const turned = { ...bow, facing: 'NE' as const, angle: facingAngle('NE') }
+    expect(unitFeatures(archers, [archers, turned], ctx).freeTargets).toBe(1)
+  })
+
+  it('points at the nearest open rear hex', () => {
+    const horse = unit('a', 'player', 'cavalry', hex(6, 2), 'W')
+    const features = unitFeatures(horse, [horse, bow], ctx)
+    expect(features.rearRange).toBe(2)
+    expect(features.rearWheels).toBe(0)
+  })
+
+  it('skips a rear hex another unit holds', () => {
+    const horse = unit('a', 'player', 'cavalry', hex(6, 2), 'W')
+    const friend = unit('b', 'player', 'infantry', hex(4, 2), 'NE')
+    expect(unitFeatures(horse, [horse, friend, bow], ctx).rearRange).toBe(3)
+  })
+
+  it('counts the enemies that would meet it frontally on that hex', () => {
+    const horse = unit('a', 'player', 'cavalry', hex(4, 2), 'W')
+    const neighbour = unit('f', 'enemy', 'infantry', hex(5, 2), 'W')
+    const features = unitFeatures(horse, [horse, bow, neighbour], ctx)
+    expect(features.rearRange).toBe(0)
+    expect(features.rearExposure).toBe(1)
+  })
+
+  it('reads how far off the nearest foe\'s facing this unit sits', () => {
+    const behind = unit('a', 'player', 'cavalry', hex(5, 0), 'SW')
+    expect(unitFeatures(behind, [behind, bow], ctx).foeOffAxis).toBe(3)
+  })
+
+  it('counts the friends already on the nearest foe', () => {
+    const foot = unit('a', 'player', 'infantry', hex(1, 4), 'NE')
+    const left = unit('b', 'player', 'infantry', hex(2, 3), 'NE')
+    const right = unit('c', 'player', 'infantry', hex(4, 2), 'W')
+    const features = unitFeatures(foot, [foot, left, right, bow], ctx)
+    expect(features.foeBesieged).toBe(2)
+  })
+
+  it('picks the most damaged enemy within reach', () => {
+    const horse = unit('a', 'player', 'cavalry', hex(1, 4), 'NE')
+    const hurt = unit('f', 'enemy', 'infantry', hex(1, 2), 'SW', 9)
+    const beyond = unit('g', 'enemy', 'infantry', hex(10, 4), 'SW', 14)
+    const features = unitFeatures(horse, [horse, { ...bow, hits: 3 }, hurt, beyond], ctx)
+    expect(features.weakDamage).toBeCloseTo(9 / HITS_TO_ELIMINATE, 10)
+    expect(features.weakWheels).toBe(-1)
+  })
+})
+
 describe('armyFeatures', () => {
   const board = [
     unit('a', 'player', 'infantry', hex(2, 4), 'NE'),
@@ -259,6 +368,24 @@ describe('armyFeatures', () => {
     const ctx = { round: 1, roster: { player: 2, enemy: 1 }, attacker: 'player' as const }
     expect(armyFeatures(board, 'player', { ...ctx, objective: 'deathmatch' }).deathmatch).toBe(1)
     expect(armyFeatures(board, 'player', { ...ctx, objective: 'hold' }).deathmatch).toBe(0)
+  })
+
+  it('reads the lead in living units from each side', () => {
+    const ctx = { round: 1, roster: { player: 2, enemy: 1 }, attacker: 'player' as const, objective: 'hold' as const }
+    expect(armyFeatures(board, 'player', ctx).aliveLead).toBe(1)
+    expect(armyFeatures(board, 'enemy', ctx).aliveLead).toBe(-1)
+  })
+
+  it('counts an enemy rear our own units hold as still open', () => {
+    const foe = unit('c', 'enemy', 'infantry', hex(3, 2), 'SW')
+    const ctx = { round: 1, roster: { player: 3, enemy: 1 }, attacker: 'player' as const, objective: 'hold' as const }
+    const surrounded = [
+      foe,
+      unit('a', 'player', 'infantry', hex(4, 2), 'W'),
+      unit('b', 'player', 'infantry', hex(4, 1), 'W'),
+      unit('d', 'player', 'infantry', hex(3, 1), 'W'),
+    ]
+    expect(armyFeatures(surrounded, 'player', ctx).foeRearsOpen).toBe(1)
   })
 
   it('does not divide by an army that is gone', () => {

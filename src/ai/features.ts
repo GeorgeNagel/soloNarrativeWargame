@@ -6,7 +6,7 @@
  * and every key carries a range so mutation can sample a sensible threshold
  * and jitter it without drifting off the useful part of the scale.
  */
-import { HEX_DIRECTIONS, hexDistance, hexEquals, hexNeighbor } from '../engine'
+import { HEX_DIRECTIONS, hexDistance, hexEquals, hexNeighbor, hexNeighbors } from '../engine'
 import type { Hex, HexDirection } from '../engine'
 import {
   HITS_TO_ELIMINATE,
@@ -17,6 +17,7 @@ import {
   canShootAt,
   facingAngle,
   isAlive,
+  isRearAttack,
   movementOf,
   profileOf,
 } from '../prototypes/tactical/model'
@@ -93,6 +94,21 @@ export const UNIT_FEATURE_SPECS: readonly FeatureSpec[] = [
   spec('friendsAlive', 1, 10),
   spec('foesAlive', 1, 10),
   spec('strengthRatio', 0, 1, 0.1),
+  // enemy fire and free shots
+  spec('threatShooters', 0, 10),
+  spec('safeAdvance', -1, 4),
+  spec('freeTargets', 0, 6),
+  spec('freeWheels', -MAX_TURNS_PER_PHASE, MAX_TURNS_PER_PHASE),
+  // the nearest open rear hex of any enemy
+  spec('rearRange', 0, FAR),
+  spec('rearWheels', -MAX_TURNS_PER_PHASE, MAX_TURNS_PER_PHASE),
+  spec('rearExposure', 0, 5),
+  // more on the nearest living enemy
+  spec('foeOffAxis', 0, 3),
+  spec('foeBesieged', 0, 5),
+  // the most damaged enemy within reach
+  spec('weakDamage', 0, 1, 0.1),
+  spec('weakWheels', -MAX_TURNS_PER_PHASE, MAX_TURNS_PER_PHASE),
 ]
 
 /** Army-level features, read once a round to pick the posture. */
@@ -111,6 +127,9 @@ export const ARMY_FEATURE_SPECS: readonly FeatureSpec[] = [
   spec('ownShooters', 0, 10),
   spec('foeShooters', 0, 10),
   spec('ownFast', 0, 10),
+  // own units alive less enemy units alive; with equal musters, the kill lead
+  spec('aliveLead', -9, 9),
+  spec('foeRearsOpen', 0, 10),
 ]
 
 // ── geometry helpers ──────────────────────────────────────
@@ -179,21 +198,52 @@ export function strengthOf(units: UnitState[], side: Side, roster: number): numb
   return left / roster
 }
 
-/** Hexes this unit could advance before the board edge or a held hex stops it. */
-function hexesAhead(unit: UnitState, units: UnitState[]): number {
+function keyOf(pos: Hex): string {
+  return `${pos.q},${pos.r}`
+}
+
+/** Hexes held by living units, less those `except` picks out. */
+function heldHexes(units: UnitState[], except: (unit: UnitState) => boolean): Set<string> {
   const held = new Set<string>()
   for (const other of units) {
-    if (other.id === unit.id || !isAlive(other)) continue
-    held.add(`${other.pos.q},${other.pos.r}`)
+    if (!isAlive(other) || except(other)) continue
+    held.add(keyOf(other.pos))
   }
+  return held
+}
+
+/**
+ * The hexes this unit could advance through, in order, before the board edge, a
+ * held hex or its allowance stops it.
+ */
+function pathAhead(unit: UnitState, held: Set<string>): Hex[] {
+  const path: Hex[] = []
   let at = unit.pos
-  let clear = 0
   for (let step = 0; step < movementOf(unit); step += 1) {
     at = hexNeighbor(at, unit.facing)
-    if (!isOnBoard(at) || held.has(`${at.q},${at.r}`)) break
-    clear += 1
+    if (!isOnBoard(at) || held.has(keyOf(at))) break
+    path.push(at)
   }
-  return clear
+  return path
+}
+
+/** Enemy shooters that could shoot `pos` as they stand, in range and in their cone. */
+function shootersOn(pos: Hex, foes: UnitState[]): number {
+  return foes.filter((foe) => canShootAt(foe, pos)).length
+}
+
+/** On-board hexes across `defender`'s rear edges that are not in `held`. */
+export function openRearHexes(defender: UnitState, held: Set<string>): Hex[] {
+  return hexNeighbors(defender.pos).filter(
+    (pos) => isOnBoard(pos) && !held.has(keyOf(pos)) && isRearAttack(defender, pos),
+  )
+}
+
+/** Edges between `defender`'s facing and the edge that points at `pos`, 0 to 3. */
+export function offAxis(defender: UnitState, pos: Hex): number {
+  const edge = edgeToward(defender.pos, pos)
+  if (!edge) return 0
+  return Math.abs(wheelsBetween(defender.facing, edge))
 }
 
 /** What the caller already knows about the round, so it is not recomputed. */
@@ -264,6 +314,78 @@ export function unitFeatures(
   // counting this unit itself keeps `friendsAlive` a headcount of the side
   friendsAlive += 1
 
+  const foes = board.filter((other) => other.side === foeSide && isAlive(other))
+  const held = heldHexes(board, (other) => other.id === unit.id)
+  const path = pathAhead(unit, held)
+
+  // the longest advance, standing still included, that ends out of every cone
+  let safeAdvance = -1
+  for (let advance = path.length; advance >= 0; advance -= 1) {
+    const end = advance === 0 ? unit.pos : path[advance - 1]
+    if (shootersOn(end, foes) === 0) {
+      safeAdvance = advance
+      break
+    }
+  }
+
+  // targets this unit could wheel onto and shoot without drawing a shot back;
+  // facing the edge nearest a target always puts it inside the 45° cone
+  let freeTargets = 0
+  let free: UnitState | null = null
+  let freeRange = Infinity
+  if (canShoot(unit)) {
+    for (const foe of foes) {
+      const range = hexDistance(unit.pos, foe.pos)
+      if (range > profileOf(unit).range || canShootAt(foe, unit.pos)) continue
+      freeTargets += 1
+      if (range < freeRange) {
+        free = foe
+        freeRange = range
+      }
+    }
+  }
+
+  // the nearest hex, this unit's own included, from which it would fight an
+  // enemy through its rear arc
+  let rear: Hex | null = null
+  let rearRange = Infinity
+  for (const foe of foes) {
+    for (const pos of openRearHexes(foe, held)) {
+      const range = hexDistance(unit.pos, pos)
+      if (range < rearRange) {
+        rear = pos
+        rearRange = range
+      }
+    }
+  }
+  const rearExposure = rear
+    ? foes.filter(
+        (foe) => hexDistance(foe.pos, rear) === 1 && !isRearAttack(foe, rear),
+      ).length
+    : 0
+
+  // the most damaged enemy this unit could close with this round, nearest first
+  let weak: UnitState | null = null
+  let weakRange = Infinity
+  for (const foe of foes) {
+    const range = hexDistance(unit.pos, foe.pos)
+    if (range > movementOf(unit) + 1) continue
+    if (!weak || foe.hits > weak.hits || (foe.hits === weak.hits && range < weakRange)) {
+      weak = foe
+      weakRange = range
+    }
+  }
+
+  const foeBesieged = nearest
+    ? board.filter(
+        (other) =>
+          other.side === unit.side &&
+          other.id !== unit.id &&
+          isAlive(other) &&
+          hexDistance(other.pos, nearest.pos) === 1,
+      ).length
+    : 0
+
   return {
     posture: ctx.posture,
     round: ctx.round,
@@ -277,7 +399,7 @@ export function unitFeatures(
     heldOnRearOnly: lock.engaged && !lock.frontally ? 1 : 0,
     adjacentEnemies,
     adjacentFriends,
-    hexesAhead: hexesAhead(unit, board),
+    hexesAhead: path.length,
     foeRange: nearest ? nearestRange : FAR,
     foeWheels: nearest ? wheelsToward(unit, nearest.pos) : 0,
     foeWheelsAbs: nearest ? Math.abs(wheelsToward(unit, nearest.pos)) : 0,
@@ -294,6 +416,17 @@ export function unitFeatures(
     friendsAlive,
     foesAlive,
     strengthRatio: strengthRatioOf(board, unit.side, foeSide, ctx.roster),
+    threatShooters: shootersOn(unit.pos, foes),
+    safeAdvance,
+    freeTargets,
+    freeWheels: free ? wheelsToward(unit, free.pos) : 0,
+    rearRange: rear ? rearRange : FAR,
+    rearWheels: rear ? wheelsToward(unit, rear) : 0,
+    rearExposure,
+    foeOffAxis: nearest ? offAxis(nearest, unit.pos) : 0,
+    foeBesieged,
+    weakDamage: weak ? weak.hits / HITS_TO_ELIMINATE : 0,
+    weakWheels: weak ? wheelsToward(unit, weak.pos) : 0,
   }
 }
 
@@ -318,6 +451,9 @@ export function armyFeatures(
   const foeSide: Side = side === 'player' ? 'enemy' : 'player'
   const own = board.filter((unit) => unit.side === side && isAlive(unit))
   const foes = board.filter((unit) => unit.side === foeSide && isAlive(unit))
+  // a rear hex one of our own units holds is still open to us; only the
+  // defender's own side can close it
+  const foeHeld = heldHexes(board, (unit) => unit.side === side)
 
   let contacts = 0
   let closest = Infinity
@@ -350,5 +486,7 @@ export function armyFeatures(
     ownShooters: own.filter(canShoot).length,
     foeShooters: foes.filter(canShoot).length,
     ownFast: own.filter((unit) => movementOf(unit) >= 3).length,
+    aliveLead: own.length - foes.length,
+    foeRearsOpen: foes.filter((foe) => openRearHexes(foe, foeHeld).length > 0).length,
   }
 }
