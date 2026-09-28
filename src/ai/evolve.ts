@@ -219,6 +219,8 @@ export interface EvolveResult {
   playoff: Standing[]
   /** The playoff's winner. */
   champion: Genome
+  /** The run as it stood after its last generation, to carry on from. */
+  state: RunState
 }
 
 // ── population ────────────────────────────────────────────
@@ -541,5 +543,6 @@ export function evolve(
     standings: state.standings,
     playoff,
     champion: playoff[0].genome,
+    state,
   }
 }
