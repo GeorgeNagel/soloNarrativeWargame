@@ -24,7 +24,13 @@ import {
 import type { RunPaths } from './checkpoint'
 import { describeGenome } from './describe'
 import { ANNEAL_SHAPES, DEFAULTS, evolve, resolveOptions } from './evolve'
-import type { AnnealShape, GenerationReport, ResolvedOptions, RunState } from './evolve'
+import type {
+  AnnealShape,
+  EvolveResult,
+  GenerationReport,
+  ResolvedOptions,
+  RunState,
+} from './evolve'
 import { genomeSize } from './genome'
 import type { Genome } from './genome'
 import { allOpponents, nameProblem, saveOpponent } from './saved-opponents'
@@ -386,6 +392,27 @@ function writeCheckpoint(
   return path
 }
 
+// ── carrying on ───────────────────────────────────────────
+
+/**
+ * Ask whether to run more generations, and how many. Null when the run should
+ * stop; a count that is not a whole number above zero is asked for again.
+ */
+async function askForMore(): Promise<number | null> {
+  const prompt = createInterface({ input: process.stdin, output: process.stdout })
+  try {
+    const more = (await prompt.question('Continue evolving? [y/N] ')).trim().toLowerCase()
+    if (more !== 'y' && more !== 'yes') return null
+    for (;;) {
+      const count = Number((await prompt.question('How many more generations? ')).trim())
+      if (Number.isInteger(count) && count >= 1) return count
+      process.stdout.write('  expected a whole number of at least 1\n')
+    }
+  } finally {
+    prompt.close()
+  }
+}
+
 // ── saving the champion ───────────────────────────────────
 
 /**
@@ -425,6 +452,77 @@ function saveChampion(
     playoff: standing.against,
     genome,
   })
+}
+
+/**
+ * The playoff, the champion and its trees, printed and written into the run's
+ * directory. A run that carries on writes them again over the old ones.
+ */
+function reportRun(
+  result: EvolveResult,
+  runId: string,
+  paths: RunPaths,
+  seconds: number,
+  say: (text: string) => void,
+): void {
+  const winner = result.playoff[0]
+  const champion = winner.genome
+  say('')
+  say(
+    `playoff: ${result.playoff.length} generation leaders over ` +
+      `${result.options.playoffGames} new boards`,
+  )
+  for (const row of playoffTable(result.playoff)) say(row)
+  say('')
+  say(
+    `champion ${champion.id} (generation ${champion.generation}) - ` +
+      `${genomeSize(champion)} nodes, ${num(seconds, 1)}s`,
+  )
+  for (const row of summary(winner)) say(`  ${row}`)
+  say('')
+  say(describeGenome(champion))
+
+  const standingRow = (standing: Standing) => ({
+    id: standing.genome.id,
+    generation: standing.genome.generation,
+    score: standing.score,
+    wins: standing.wins,
+    losses: standing.losses,
+    differential: standing.differential,
+    against: standing.against,
+  })
+  const { opponents: _opponents, ...options } = serializeOptions(result.options)
+  write(
+    paths.run,
+    `${JSON.stringify(
+      {
+        runId,
+        // the opponents by name only; the checkpoints hold them in full
+        options: { ...options, opponents: result.options.opponents.map((o) => o.id) },
+        seconds,
+        champion: champion.id,
+        playoff: result.playoff.map(standingRow),
+        reports: result.reports,
+        standings: result.standings.map(standingRow),
+      },
+      null,
+      2,
+    )}\n`,
+  )
+  write(paths.curve, curveCsv(result.reports))
+  write(paths.champion, `${JSON.stringify(champion)}\n`)
+  write(
+    paths.championText,
+    [
+      `champion of ${runId}, from the playoff over ${result.options.playoffGames} boards`,
+      '',
+      ...summary(winner),
+      '',
+      describeGenome(champion),
+      '',
+    ].join('\n'),
+  )
+  say(`\nwrote ${paths.root}/`)
 }
 
 async function main(): Promise<void> {
@@ -508,84 +606,44 @@ async function main(): Promise<void> {
     say(header(settled))
   }
 
-  const started = Date.now()
-  const result = evolve(
-    settled,
-    {
-      onGeneration: (report, state) => {
-        if (!flags.quiet) say(line(report, settled))
-        const last = state.generation === settled.generations
-        const due =
-          flags.checkpointEvery > 0 && state.generation % flags.checkpointEvery === 0
-        if (last || due) writeCheckpoint(paths, runId, state, settled)
-      },
-    },
-    from,
-  )
-  const seconds = (Date.now() - started) / 1000
-
-  const winner = result.playoff[0]
-  const champion = winner.genome
-  say('')
-  say(
-    `playoff: ${result.playoff.length} generation leaders over ` +
-      `${settled.playoffGames} new boards`,
-  )
-  for (const row of playoffTable(result.playoff)) say(row)
-  say('')
-  say(
-    `champion ${champion.id} (generation ${champion.generation}) - ` +
-      `${genomeSize(champion)} nodes, ${num(seconds, 1)}s`,
-  )
-  for (const row of summary(winner)) say(`  ${row}`)
-  say('')
-  say(describeGenome(champion))
-
-  const standingRow = (standing: Standing) => ({
-    id: standing.genome.id,
-    generation: standing.genome.generation,
-    score: standing.score,
-    wins: standing.wins,
-    losses: standing.losses,
-    differential: standing.differential,
-    against: standing.against,
-  })
-  const { opponents: _opponents, ...options } = serializeOptions(result.options)
-  write(
-    paths.run,
-    `${JSON.stringify(
+  // time spent evolving, not waiting at a prompt
+  let seconds = 0
+  // without a terminal there is no one to ask, so the run stops at --gens
+  const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY)
+  let run = settled
+  let result: EvolveResult
+  for (;;) {
+    const current = run
+    const started = Date.now()
+    result = evolve(
+      current,
       {
-        runId,
-        // the opponents by name only; the checkpoints hold them in full
-        options: { ...options, opponents: result.options.opponents.map((o) => o.id) },
-        seconds,
-        champion: champion.id,
-        playoff: result.playoff.map(standingRow),
-        reports: result.reports,
-        standings: result.standings.map(standingRow),
+        onGeneration: (report, state) => {
+          if (!flags.quiet) say(line(report, current))
+          const last = state.generation === current.generations
+          const due =
+            flags.checkpointEvery > 0 && state.generation % flags.checkpointEvery === 0
+          if (last || due) writeCheckpoint(paths, runId, state, current)
+        },
       },
-      null,
-      2,
-    )}\n`,
-  )
-  write(paths.curve, curveCsv(result.reports))
-  write(paths.champion, `${JSON.stringify(champion)}\n`)
-  write(
-    paths.championText,
-    [
-      `champion of ${runId}, from the playoff over ${settled.playoffGames} boards`,
-      '',
-      ...summary(winner),
-      '',
-      describeGenome(champion),
-      '',
-    ].join('\n'),
-  )
-  say(`\nwrote ${paths.root}/`)
+      from,
+    )
+    seconds += (Date.now() - started) / 1000
+    reportRun(result, runId, paths, seconds, say)
+
+    const more = interactive ? await askForMore() : null
+    if (more === null) break
+    // the same run carried further, as --resume would, from where it stands
+    run = { ...current, generations: current.generations + more }
+    from = result.state
+    say('')
+    say(`continuing up to generation ${run.generations}`)
+    if (!flags.quiet) say(header(run))
+  }
+  const winner = result.playoff[0]
 
   // without a terminal nothing is saved unless it was asked for, so scripted
   // runs do not fill the opponents directory with generated names
-  const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY)
   const name = flags.saveAs ?? (interactive ? await askForName(flags.outDir) : null)
   if (name !== null) {
     say(`saved ${saveChampion(flags.outDir, name, runId, winner)}`)

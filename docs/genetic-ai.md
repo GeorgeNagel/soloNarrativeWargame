@@ -127,7 +127,17 @@ champion.
 ## Opponents
 
 A run plays two hand-written baselines (below) and **every saved opponent** in
-`artifacts/opponents/`. At the end of a run in a terminal, `npm run evolve` asks
+`artifacts/opponents/`. At the end of a run in a terminal, `npm run evolve` first
+asks whether to carry on:
+
+```
+Continue evolving? [y/N]
+How many more generations?
+```
+
+A yes runs that many more generations of the same run, as `--resume` would, then
+plays the playoff again and rewrites the run's files. Once the answer is no, it
+asks
 
 ```
 Save champion as a named opponent? [Y/n]
