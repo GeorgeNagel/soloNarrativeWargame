@@ -9,6 +9,7 @@ import {
 import type { Side, UnitState, UnitType } from '../prototypes/tactical/model'
 import {
   ARMY_FEATURE_SPECS,
+  FAR,
   UNIT_FEATURE_SPECS,
   armyFeatures,
   edgeToward,
@@ -229,7 +230,7 @@ describe('armyFeatures', () => {
 
   it('does not divide by an army that is gone', () => {
     const features = armyFeatures([], 'player', { round: 1, roster: ROSTER })
-    expect(features.meanRange).toBe(8)
+    expect(features.meanRange).toBe(FAR)
     expect(features.strengthRatio).toBe(0.5)
   })
 })

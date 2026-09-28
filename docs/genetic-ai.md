@@ -51,13 +51,14 @@ only thing separating two armies that never broke each other.
 Rosters and deployments are drawn per game: 3–10 units a side, each a random type,
 deployed in the two rows nearest that side's own edge. Both sides get the **same**
 mix of types, and the enemy deployment is the player's reflected through the
-board's centre hex — the shape the hand-written St. Aubin Ford scenario already
-has. That reflection preserves every distance on the board, so swapping sides is
-an exact rematch and a win says something about the AI rather than about the draw.
+board's centre — the shape the hand-written St. Aubin Ford scenario already has.
+That reflection preserves every distance on the board, so swapping sides is an
+exact rematch and a win says something about the AI rather than about the draw.
 
-The rectangular board is not closed under that reflection — the far corner of the
-bottom row lands one hex off the top row — so `deploymentZone` drops the handful
-of hexes whose mirror is off the board rather than distorting the mirror.
+On the 14×14 board, with an even number of rows, the reflection maps every hex
+onto another hex of the board. An odd-sized board is not closed under it — the
+far corner of the bottom row lands one hex off the top row — so `deploymentZone`
+drops the hexes whose mirror is off the board rather than distorting the mirror.
 
 ## A generation
 
@@ -217,5 +218,5 @@ ones that matter most:
   which is not the same as playing well. The benchmark columns are the check on
   that; a rising `best` with a flat benchmark means the population is chasing
   itself.
-- **One board, one rule set.** The board is the fixed 7×7 with no terrain, and
+- **One board, one rule set.** The board is the fixed 14×14 with no terrain, and
   shooting has no line-of-sight rule yet, so an evolved AI is fitted to those.

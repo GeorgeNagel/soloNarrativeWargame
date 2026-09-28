@@ -1,13 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { hexDistance } from '../engine'
-import { BOARD_ROWS, UNIT_TYPES } from '../prototypes/tactical/model'
+import { BOARD_ROWS, UNIT_TYPES, boardTiles } from '../prototypes/tactical/model'
 import { isOnBoard } from '../prototypes/tactical/sim'
 import { makeRng } from './rng'
 import {
   DEPLOY_ROWS,
   MAX_ROSTER,
   MIN_ROSTER,
-  centreHex,
   deploy,
   deploymentZone,
   mirrorHex,
@@ -21,8 +20,8 @@ describe('mirrorHex', () => {
     for (const tile of zone) expect(mirrorHex(mirrorHex(tile))).toEqual(tile)
   })
 
-  it('leaves the centre hex where it is', () => {
-    expect(mirrorHex(centreHex())).toEqual(centreHex())
+  it('maps the whole board onto itself', () => {
+    for (const tile of boardTiles()) expect(isOnBoard(mirrorHex(tile))).toBe(true)
   })
 
   it('preserves every distance, so a side swap is a fair rematch', () => {

@@ -44,6 +44,13 @@ function spec(key: string, min: number, max: number, step = 1): FeatureSpec {
 export const POSTURE_COUNT = 4
 
 /**
+ * Ranges in hexes are split no further out than this, and it stands in for the
+ * range to an enemy that is not there. It covers the gap between two armies as
+ * they deploy on the board, with room to spare.
+ */
+export const FAR = 16
+
+/**
  * Per-unit features. Everything is either a count, a distance in hexes, a
  * signed count of 60° wheels, or a 0/1 flag, so thresholds read as tactics.
  */
@@ -63,7 +70,7 @@ export const UNIT_FEATURE_SPECS: readonly FeatureSpec[] = [
   spec('adjacentFriends', 0, 6),
   spec('hexesAhead', 0, 4),
   // the nearest living enemy
-  spec('foeRange', 1, 8),
+  spec('foeRange', 1, FAR),
   spec('foeWheels', -MAX_TURNS_PER_PHASE, MAX_TURNS_PER_PHASE),
   spec('foeWheelsAbs', 0, MAX_TURNS_PER_PHASE),
   spec('foeDamage', 0, 1, 0.1),
@@ -73,7 +80,7 @@ export const UNIT_FEATURE_SPECS: readonly FeatureSpec[] = [
   spec('foeRearOpen', 0, 1),
   spec('foeCanShoot', 0, 1),
   // pressure and shooting
-  spec('roundsToContact', -4, 8),
+  spec('roundsToContact', -4, FAR),
   spec('shootTargets', 0, 6),
   spec('shootRange', 0, 4),
   spec('shootWheels', -MAX_TURNS_PER_PHASE, MAX_TURNS_PER_PHASE),
@@ -92,8 +99,8 @@ export const ARMY_FEATURE_SPECS: readonly FeatureSpec[] = [
   spec('foeStrength', 0, 1, 0.1),
   spec('strengthRatio', 0, 1, 0.1),
   spec('contacts', 0, 10),
-  spec('closestRange', 1, 8),
-  spec('meanRange', 1, 8, 0.5),
+  spec('closestRange', 1, FAR),
+  spec('meanRange', 1, FAR, 0.5),
   spec('ownShooters', 0, 10),
   spec('foeShooters', 0, 10),
   spec('ownFast', 0, 10),
@@ -259,7 +266,7 @@ export function unitFeatures(
     adjacentEnemies,
     adjacentFriends,
     hexesAhead: hexesAhead(unit, board),
-    foeRange: nearest ? nearestRange : 8,
+    foeRange: nearest ? nearestRange : FAR,
     foeWheels: nearest ? wheelsToward(unit, nearest.pos) : 0,
     foeWheelsAbs: nearest ? Math.abs(wheelsToward(unit, nearest.pos)) : 0,
     foeDamage: nearest ? nearest.hits / HITS_TO_ELIMINATE : 0,
@@ -268,7 +275,7 @@ export function unitFeatures(
     foeFacesMe: nearest && !inRearArc(nearest, unit.pos) ? 1 : 0,
     foeRearOpen: nearest && inRearArc(nearest, unit.pos) ? 1 : 0,
     foeCanShoot: nearest && canShoot(nearest) ? 1 : 0,
-    roundsToContact: Number.isFinite(roundsToContact) ? roundsToContact : 8,
+    roundsToContact: Number.isFinite(roundsToContact) ? roundsToContact : FAR,
     shootTargets,
     shootRange,
     shootWheels: reachable ? wheelsToward(unit, reachable.pos) : 0,
@@ -324,8 +331,8 @@ export function armyFeatures(
     foeStrength: strengthOf(board, foeSide, ctx.roster[foeSide]),
     strengthRatio: strengthRatioOf(board, side, foeSide, ctx.roster),
     contacts,
-    closestRange: Number.isFinite(closest) ? closest : 8,
-    meanRange: own.length > 0 && foes.length > 0 ? rangeSum / own.length : 8,
+    closestRange: Number.isFinite(closest) ? closest : FAR,
+    meanRange: own.length > 0 && foes.length > 0 ? rangeSum / own.length : FAR,
     ownShooters: own.filter(canShoot).length,
     foeShooters: foes.filter(canShoot).length,
     ownFast: own.filter((unit) => movementOf(unit) >= 3).length,

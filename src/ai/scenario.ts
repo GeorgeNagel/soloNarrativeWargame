@@ -11,6 +11,7 @@
 import { hex } from '../engine'
 import type { Hex, HexDirection } from '../engine'
 import {
+  BOARD_COLUMNS,
   BOARD_ROWS,
   UNIT_PROFILES,
   UNIT_TYPES,
@@ -38,23 +39,35 @@ export interface Scenario {
   units: UnitState[]
 }
 
-/** The board's centre hex, which the two deployments reflect through. */
-export function centreHex(): Hex {
+/**
+ * What a tile and its mirror add up to: the reflection is `sum - tile`.
+ *
+ * With an odd number of rows the board turns about its centre hex. With an even
+ * number it turns about the midpoint of the two middle rows, which on the offset
+ * layout `boardTiles` draws maps every tile onto another tile of the board.
+ */
+function reflectionSum(): Hex {
+  if (BOARD_ROWS % 2 === 0) {
+    return hex(BOARD_COLUMNS - 1 - Math.floor((BOARD_ROWS - 1) / 2), BOARD_ROWS - 1)
+  }
   const row = Math.floor(BOARD_ROWS / 2)
-  return boardTiles().filter((tile) => tile.r === row)[Math.floor(BOARD_ROWS / 2)]
+  const centre = boardTiles().filter((tile) => tile.r === row)[Math.floor(BOARD_COLUMNS / 2)]
+  return hex(2 * centre.q, 2 * centre.r)
 }
+
+const REFLECTION_SUM = reflectionSum()
 
 /**
  * Point reflection of a tile through the board's centre — an exact 180° turn of
  * the board in hex space, so it preserves every distance between tiles.
  *
- * The rectangular board is not closed under it: the far corner of the bottom row
- * reflects one hex off the top row. `deploymentZone` drops those hexes rather
- * than distorting the mirror, which is what keeps a side swap a fair rematch.
+ * On an odd-sized board the rectangle is not closed under it: the far corner of
+ * the bottom row reflects one hex off the top row. `deploymentZone` drops those
+ * hexes rather than distorting the mirror, which is what keeps a side swap a
+ * fair rematch. An even-sized board has no such hexes.
  */
 export function mirrorHex(tile: Hex): Hex {
-  const centre = centreHex()
-  return hex(2 * centre.q - tile.q, 2 * centre.r - tile.r)
+  return hex(REFLECTION_SUM.q - tile.q, REFLECTION_SUM.r - tile.r)
 }
 
 /**

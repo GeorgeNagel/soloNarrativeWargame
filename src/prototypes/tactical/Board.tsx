@@ -20,7 +20,7 @@ const MARGIN = 7
 /** Matches the console's stagger: one beat per engagement in the round. */
 const CLASH_STAGGER_MS = 260
 
-const FILES = 'ABCDEFG'
+const FILES = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
 
 function px(tile: Hex): Point {
   return hexToPixel(tile, S)

@@ -15,8 +15,8 @@ import {
 } from '../../engine'
 import type { Hex, HexDirection } from '../../engine'
 
-export const BOARD_COLUMNS = 7
-export const BOARD_ROWS = 7
+export const BOARD_COLUMNS = 14
+export const BOARD_ROWS = 14
 
 /** A unit is removed from play once it has acquired this many hits. */
 export const HITS_TO_ELIMINATE = 15
@@ -312,8 +312,8 @@ export function isRearAttack(defender: UnitState, attackerPos: Hex): boolean {
 // ── the scenario ──────────────────────────────────────────
 
 /**
- * The fixed scenario: one of each type a side, lines mirrored through the
- * board's centre hex so the wings meet before the centre does.
+ * The fixed scenario: one of each type a side, lines point-mirrored through the
+ * board's centre so the wings meet before the centre does.
  */
 interface RosterEntry {
   tag: string
@@ -323,17 +323,17 @@ interface RosterEntry {
 }
 
 const PLAYER_START: RosterEntry[] = [
-  { tag: 'INF-01', name: '1st Foot, Aubin Levy', type: 'infantry', pos: hex(0, 6) },
-  { tag: 'ARC-02', name: 'Levy Bowmen, Marsan', type: 'archers', pos: hex(-1, 5) },
-  { tag: 'SKM-03', name: 'Guiscard Skirmishers', type: 'skirmishers', pos: hex(2, 5) },
-  { tag: 'CAV-04', name: 'Aubin Horse', type: 'cavalry', pos: hex(1, 6) },
+  { tag: 'INF-01', name: '1st Foot, Aubin Levy', type: 'infantry', pos: hex(0, 13) },
+  { tag: 'ARC-02', name: 'Levy Bowmen, Marsan', type: 'archers', pos: hex(-2, 12) },
+  { tag: 'SKM-03', name: 'Guiscard Skirmishers', type: 'skirmishers', pos: hex(1, 12) },
+  { tag: 'CAV-04', name: 'Aubin Horse', type: 'cavalry', pos: hex(1, 13) },
 ]
 
 const ENEMY_START: RosterEntry[] = [
-  { tag: 'BRB-11', name: 'Brabant Foot XI', type: 'infantry', pos: hex(4, 0) },
-  { tag: 'BRB-12', name: 'Brabant Bowmen XII', type: 'archers', pos: hex(5, 1) },
-  { tag: 'BRB-13', name: 'Brabant Skirmishers XIII', type: 'skirmishers', pos: hex(2, 1) },
-  { tag: 'BRB-14', name: 'Brabant Horse XIV', type: 'cavalry', pos: hex(3, 0) },
+  { tag: 'BRB-11', name: 'Brabant Foot XI', type: 'infantry', pos: hex(7, 0) },
+  { tag: 'BRB-12', name: 'Brabant Bowmen XII', type: 'archers', pos: hex(9, 1) },
+  { tag: 'BRB-13', name: 'Brabant Skirmishers XIII', type: 'skirmishers', pos: hex(6, 1) },
+  { tag: 'BRB-14', name: 'Brabant Horse XIV', type: 'cavalry', pos: hex(6, 0) },
 ]
 
 function buildSide(
