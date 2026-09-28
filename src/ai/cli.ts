@@ -83,7 +83,8 @@ const USAGE = `Usage: npm run evolve -- [flags]
                      feature    point a branch at a different feature
                      nudge      nudge a leaf's order or posture
                      replace    replace a leaf's order or posture outright
-                     structure  regrow a subtree, or collapse a branch
+                     grow       grow a random subtree from a leaf
+                     collapse   collapse a branch into one of its leaves
   --attack-dealt W score an attacking game earns per unit of enemy strength
                    removed, in generation 0 (default ${DEFAULTS.attackDealt})
   --attack-taken W score an attacking game loses per unit of own strength lost,
@@ -115,7 +116,7 @@ function weightsText(weights: MutationWeights): string {
     .join(',')
 }
 
-/** `threshold=4,structure=0` onto `base`, so a flag names only what it changes. */
+/** `threshold=4,collapse=0` onto `base`, so a flag names only what it changes. */
 function parseWeights(text: string, base: MutationWeights): MutationWeights {
   const weights = { ...base }
   for (const pair of text.split(',')) {

@@ -210,7 +210,8 @@ function parseWeights(value: unknown, what: string): MutationWeights {
     feature: asNumber(record.feature, `${what}.feature`),
     nudge: asNumber(record.nudge, `${what}.nudge`),
     replace: asNumber(record.replace, `${what}.replace`),
-    structure: asNumber(record.structure, `${what}.structure`),
+    grow: asNumber(record.grow, `${what}.grow`),
+    collapse: asNumber(record.collapse, `${what}.collapse`),
   }
 }
 

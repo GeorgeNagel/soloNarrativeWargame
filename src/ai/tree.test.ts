@@ -3,6 +3,7 @@ import type { FeatureSpec } from './features'
 import { makeRng } from './rng'
 import {
   branch,
+  commonPositions,
   copyTree,
   crossover,
   depthOf,
@@ -167,10 +168,31 @@ describe('crossover and mutate', () => {
     for (let i = 0; i < 300; i += 1) {
       const a = randomTree(SPEC, rng)
       const b = randomTree(SPEC, rng)
-      const child = crossover(a, b, SPEC, rng)
+      const child = crossover(a, b, rng)
       expect(depthOf(child)).toBeLessThanOrEqual(SPEC.maxDepth)
       expect(depthOf(mutate(child, SPEC, rng, 0.3))).toBeLessThanOrEqual(SPEC.maxDepth)
     }
+  })
+
+  it('finds the positions both trees have', () => {
+    const a = branch('range', 3, leaf(1), branch('flag', 0.5, leaf(2), leaf(3)))
+    const b = branch('share', 0.5, branch('range', 5, leaf(4), leaf(5)), leaf(6))
+    const found = commonPositions(a, b)
+    expect(found.map((position) => position.into)).toEqual([0, 1, 2])
+    expect(found.map((position) => sizeOf(position.from))).toEqual([5, 3, 1])
+  })
+
+  it('swaps only the subtree at the same position', () => {
+    const a = branch('range', 3, leaf(1), branch('flag', 0.5, leaf(2), leaf(3)))
+    const b = branch('share', 0.5, branch('range', 5, leaf(4), leaf(5)), leaf(6))
+    const rng = makeRng(9)
+    const seen = new Set<string>()
+    for (let i = 0; i < 100; i += 1) seen.add(JSON.stringify(crossover(a, b, rng)))
+    expect([...seen].sort()).toEqual(
+      [b, spliceAt(a, 1, copyTree(b.below)), spliceAt(a, 2, leaf(6))]
+        .map((tree) => JSON.stringify(tree))
+        .sort(),
+    )
   })
 
   it('does not disturb the parents', () => {
@@ -178,7 +200,7 @@ describe('crossover and mutate', () => {
     const a = randomTree(SPEC, rng)
     const b = randomTree(SPEC, rng)
     const before = JSON.stringify([a, b])
-    crossover(a, b, SPEC, rng)
+    crossover(a, b, rng)
     mutate(a, SPEC, rng, 1)
     expect(JSON.stringify([a, b])).toBe(before)
   })

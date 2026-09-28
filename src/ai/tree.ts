@@ -252,21 +252,39 @@ export function randomTree<L>(spec: TreeSpec<L>, rng: Rng, depth = 1): Tree<L> {
 // ── crossover and mutation ────────────────────────────────
 
 /**
- * Subtree crossover: the child is `a` with one of its subtrees replaced by one
- * of `b`'s, then cut back to the depth limit.
+ * The positions `a` and `b` both have: each as the index of `a`'s subtree there
+ * (in `subtrees` order) and `b`'s subtree at the same path from the root.
  */
-export function crossover<L>(
+export function commonPositions<L>(
   a: Tree<L>,
   b: Tree<L>,
-  spec: TreeSpec<L>,
-  rng: Rng,
-): Tree<L> {
-  const into = rng.int(sizeOf(a))
-  const from = subtrees(b)[rng.int(sizeOf(b))]
-  return prune(spliceAt(copyTree(a), into, copyTree(from)), spec.maxDepth)
+): { into: number; from: Tree<L> }[] {
+  const found: { into: number; from: Tree<L> }[] = []
+  const walk = (x: Tree<L>, y: Tree<L>, index: number) => {
+    found.push({ into: index, from: y })
+    if (x.kind === 'leaf' || y.kind === 'leaf') return
+    walk(x.below, y.below, index + 1)
+    walk(x.atOrAbove, y.atOrAbove, index + 1 + sizeOf(x.below))
+  }
+  walk(a, b, 0)
+  return found
 }
 
-/** Relative weights of the five things mutation does to a node. */
+/**
+ * Same-position crossover: the child is `a` with the subtree at one path
+ * replaced by `b`'s subtree at that same path. The graft sat at the same depth
+ * in `b`, so it always fits the depth limit and nothing is pruned; pruning only
+ * ever removes nodes, so it would shrink trees generation on generation. It also
+ * lands under the same chain of branches it grew under, which in a converged
+ * lineage means much the same tests.
+ */
+export function crossover<L>(a: Tree<L>, b: Tree<L>, rng: Rng): Tree<L> {
+  const positions = commonPositions(a, b)
+  const { into, from } = positions[rng.int(positions.length)]
+  return spliceAt(copyTree(a), into, copyTree(from))
+}
+
+/** Relative weights of the six things mutation does to a node. */
 export interface MutationWeights {
   /** Move a branch's threshold one step. */
   threshold: number
@@ -276,8 +294,14 @@ export interface MutationWeights {
   nudge: number
   /** Replace a leaf's payload outright. */
   replace: number
-  /** Regrow a whole subtree, or collapse a branch into one of its leaves. */
-  structure: number
+  /** Grow a random subtree in place of a leaf. */
+  grow: number
+  /**
+   * Collapse a branch into one of its leaves. Kept below `grow`: a collapse
+   * drops a whole subtree while a grow adds only a small one, so at equal odds
+   * trees shrink generation on generation.
+   */
+  collapse: number
 }
 
 export const DEFAULT_MUTATION_WEIGHTS: MutationWeights = {
@@ -285,7 +309,8 @@ export const DEFAULT_MUTATION_WEIGHTS: MutationWeights = {
   feature: 2,
   nudge: 3,
   replace: 2,
-  structure: 1,
+  grow: 1,
+  collapse: 0.25,
 }
 
 /**
@@ -312,7 +337,7 @@ export function mutate<L>(
     }
 
     if (node.kind === 'leaf') {
-      const total = weights.nudge + weights.replace + weights.structure
+      const total = weights.nudge + weights.replace + weights.grow
       const draw = rng.next() * total
       if (draw < weights.nudge) return leaf(spec.nudgeLeaf(node.value, rng))
       if (draw < weights.nudge + weights.replace) return leaf(spec.randomLeaf(rng))
@@ -320,7 +345,7 @@ export function mutate<L>(
       return randomTree(spec, rng, depth)
     }
 
-    const total = weights.threshold + weights.feature + weights.structure
+    const total = weights.threshold + weights.feature + weights.collapse
     const draw = rng.next() * total
     if (draw < weights.threshold) {
       const feature = specFor(spec.features, node.feature)

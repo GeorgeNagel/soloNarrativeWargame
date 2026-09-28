@@ -144,16 +144,18 @@ beat harder. `npm run ai:play -- --vs NAME` plays against one by name. To retire
 one, delete its file.
 
 A child is bred **tree by tree**: each of the five trees is crossed over with its
-counterpart on its own — a subtree of one parent's cavalry tree replaces a subtree
-of the other's — and then mutated. Crossing tree by tree is what lets a good
-cavalry tree survive while the infantry tree is recombined. `--crossover` is the
-per-tree chance of crossing; a tree that is not crossed is copied from the first
-parent. Mutation walks every node and, per node, moves a threshold one step,
-repoints a branch at another feature, nudges or replaces a leaf's order, regrows a
-subtree, or collapses a branch into one of the leaves it held.
-`--mutation-mix` sets the relative odds of those kinds, for example
-`--mutation-mix structure=3,threshold=2`. Children are pruned back to the depth
-limit by collapsing anything deeper into a leaf it contained.
+counterpart on its own — a subtree of one parent's cavalry tree replaces the
+subtree at the same position (the same path from the root) in the other's — and
+then mutated. Crossing at the same position means a graft always fits the depth
+limit and lands under the branches it grew under. Crossing tree by tree is what
+lets a good cavalry tree survive while the infantry tree is recombined.
+`--crossover` is the per-tree chance of crossing; a tree that is not crossed is
+copied from the first parent. Mutation walks every node and, per node, moves a
+threshold one step, repoints a branch at another feature, nudges or replaces a
+leaf's order, grows a subtree from a leaf, or collapses a branch into one of the
+leaves it held. `--mutation-mix` sets the relative odds of those kinds, for
+example `--mutation-mix grow=3,threshold=2`. A mutated child is pruned back to
+the depth limit by collapsing anything deeper into a leaf it contained.
 
 ### Annealing
 
@@ -351,7 +353,7 @@ ones that matter most:
 | `--mutation-end` | `--mutation` | mutation chance once annealing is done |
 | `--anneal` | geometric | `linear` or `geometric` path from start to end rate |
 | `--anneal-gens` | `--gens` | generations the anneal takes |
-| `--mutation-mix` | threshold=4,feature=2,nudge=3,replace=2,structure=1 | relative odds of each kind of mutation |
+| `--mutation-mix` | threshold=4,feature=2,nudge=3,replace=2,grow=1,collapse=0.25 | relative odds of each kind of mutation |
 | `--crossover` | 1 | per-tree chance a child is crossed rather than copied |
 | `--survivors` | 0.5 | fraction of the ranking that breeds |
 | `--tournament` | 2 | survivors drawn per parent pick; higher favours the leaders |

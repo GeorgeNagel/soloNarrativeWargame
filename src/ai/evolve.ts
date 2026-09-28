@@ -3,8 +3,8 @@
  *
  * A generation is one gauntlet (see `tournament.ts`) — every genome against every
  * fixed opponent over a fresh set of boards — a ranking, and then the top half
- * reproducing to refill the population. Crossover swaps subtrees between two
- * parents, tree by tree, and mutation nudges thresholds, repoints branches at
+ * reproducing to refill the population. Crossover swaps subtrees at the same
+ * position between two parents, tree by tree, and mutation nudges thresholds, repoints branches at
  * other features and regrows the occasional subtree.
  *
  * Fitness is absolute: the opponents never change during a run, so a rising
@@ -25,7 +25,7 @@ import type { Opponent } from './opponents'
 import { makeRng, seedFrom } from './rng'
 import type { Rng } from './rng'
 import { DEFAULT_MUTATION_WEIGHTS, crossover, mutate } from './tree'
-import type { MutationWeights, Tree, TreeSpec } from './tree'
+import type { MutationWeights, Tree } from './tree'
 import { runGauntlet } from './tournament'
 import type { Benchmark, Standing } from './tournament'
 
@@ -61,7 +61,7 @@ export interface EvolveOptions {
   /**
    * Relative odds of each kind of change when a node mutates: nudging a
    * threshold, repointing a branch at another feature, nudging or replacing a
-   * leaf, or regrowing a subtree.
+   * leaf, growing a subtree from a leaf, or collapsing a branch.
    */
   mutationWeights?: MutationWeights
   /**
@@ -168,11 +168,11 @@ export function breedingProblem(options: ResolvedOptions): string | null {
   if (Object.values(w).some((weight) => !(weight >= 0))) {
     return 'mutation weights must be zero or more'
   }
-  if (w.threshold + w.feature + w.structure <= 0) {
-    return 'mutation weights give a branch nothing to do: raise threshold, feature or structure'
+  if (w.threshold + w.feature + w.collapse <= 0) {
+    return 'mutation weights give a branch nothing to do: raise threshold, feature or collapse'
   }
-  if (w.nudge + w.replace + w.structure <= 0) {
-    return 'mutation weights give a leaf nothing to do: raise nudge, replace or structure'
+  if (w.nudge + w.replace + w.grow <= 0) {
+    return 'mutation weights give a leaf nothing to do: raise nudge, replace or grow'
   }
   return null
 }
@@ -282,16 +282,10 @@ export type Variation = Pick<
 >
 
 /** Cross two trees with probability `rate`, otherwise copy the first. */
-function maybeCross<L>(
-  a: Tree<L>,
-  b: Tree<L>,
-  spec: TreeSpec<L>,
-  rng: Rng,
-  rate: number,
-): Tree<L> {
+function maybeCross<L>(a: Tree<L>, b: Tree<L>, rng: Rng, rate: number): Tree<L> {
   // `mutate` rebuilds every node, so handing back the parent's tree shares nothing
   if (!rng.chance(rate)) return a
-  return crossover(a, b, spec, rng)
+  return crossover(a, b, rng)
 }
 
 /**
@@ -311,11 +305,11 @@ export function breed(
   const { mutationRate, mutationWeights, crossoverRate } = variation
   const units = {} as Record<UnitType, Tree<RoundOrder>>
   for (const type of UNIT_TYPES) {
-    const crossed = maybeCross(a.units[type], b.units[type], specs.unit, rng, crossoverRate)
+    const crossed = maybeCross(a.units[type], b.units[type], rng, crossoverRate)
     units[type] = mutate(crossed, specs.unit, rng, mutationRate, mutationWeights)
   }
   const army = mutate(
-    maybeCross(a.army, b.army, specs.army, rng, crossoverRate),
+    maybeCross(a.army, b.army, rng, crossoverRate),
     specs.army,
     rng,
     mutationRate,

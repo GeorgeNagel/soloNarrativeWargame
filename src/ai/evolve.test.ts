@@ -329,7 +329,7 @@ describe('resolveOptions', () => {
     ).not.toThrow()
     expect(() =>
       resolveOptions({
-        mutationWeights: { ...DEFAULTS.mutationWeights, threshold: 0, feature: 0, structure: 0 },
+        mutationWeights: { ...DEFAULTS.mutationWeights, threshold: 0, feature: 0, collapse: 0 },
       }),
     ).toThrow(/branch/)
   })
