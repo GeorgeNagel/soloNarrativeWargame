@@ -31,7 +31,7 @@ import {
   armyFeatures,
   unitFeatures,
 } from './features'
-import { evaluate, randomTree, sizeOf } from './tree'
+import { deadNodesOf, evaluate, randomTree, sizeOf } from './tree'
 import type { Tree, TreeSpec } from './tree'
 import type { Commander } from './commander'
 import type { Roster } from './roster'
@@ -193,5 +193,17 @@ export function genomeSize(genome: Genome): number {
   return UNIT_TYPES.reduce(
     (total, type) => total + sizeOf(genome.units[type]),
     sizeOf(genome.army),
+  )
+}
+
+/**
+ * Nodes across the genome that no feature vector can reach. Crossover grafts
+ * tests that a branch above has already decided, and the subtree behind one of
+ * those is dead weight — counted here so a report can say so.
+ */
+export function genomeDeadNodes(genome: Genome): number {
+  return UNIT_TYPES.reduce(
+    (total, type) => total + deadNodesOf(genome.units[type]),
+    deadNodesOf(genome.army),
   )
 }

@@ -78,6 +78,21 @@ feature, nudges or replaces a leaf's order, regrows a subtree, or collapses a
 branch into one of the leaves it held. Children are pruned back to the depth limit
 by collapsing anything deeper into a leaf it contained.
 
+### Unreachable branches
+
+Crossover freely grafts a test that a branch above it has already decided — a
+`foeCanShoot < 0.5` below the branch that took the `foeCanShoot >= 0.5` side,
+say. Everything behind that test is then unreachable: no feature vector can get
+there. Evolution neither removes these nor is troubled by them, and they
+accumulate — in the run below they grow from 3% of the population's nodes at
+generation 0 to 12% by generation 40, and the champion carries 19%.
+
+They are not a correctness problem for play, because an unreachable branch is
+never evaluated. They are a problem for *reading* a genome, so `describeGenome`
+folds them away first and the header reports reachable nodes against the total.
+Node counts in the generation table are still raw sizes, which is why the
+champion's line and the table do not have to agree.
+
 ## Reading a run
 
 ```
