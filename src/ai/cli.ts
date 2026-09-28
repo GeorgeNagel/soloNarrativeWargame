@@ -42,6 +42,9 @@ interface Flags {
   anneal: AnnealShape
   annealGens: number | null
   mutationWeights: MutationWeights
+  attackDealt: number
+  attackTaken: number
+  shapingGens: number | null
   crossover: number
   survivors: number
   tournament: number
@@ -81,6 +84,15 @@ const USAGE = `Usage: npm run evolve -- [flags]
                      nudge      nudge a leaf's order or posture
                      replace    replace a leaf's order or posture outright
                      structure  regrow a subtree, or collapse a branch
+  --attack-dealt W score an attacking game earns per unit of enemy strength
+                   removed, in generation 0 (default ${DEFAULTS.attackDealt})
+  --attack-taken W score an attacking game loses per unit of own strength lost,
+                   in generation 0 (default ${DEFAULTS.attackTaken}); the two must
+                   sum to at most 1. Both move linearly back to
+                   ${DEFAULTS.attackDealt}/${DEFAULTS.attackTaken}, the plain differential. The playoff always
+                   scores on the plain differential
+  --shaping-gens N generations the attack weights take to return to the plain
+                   differential, holding there after (default: --gens)
   --crossover P    per-tree chance a child is crossed from both parents rather
                    than copied from one (default ${DEFAULTS.crossoverRate})
   --survivors F    fraction of the ranking that breeds (default ${DEFAULTS.survivorFraction})
@@ -131,6 +143,9 @@ function parseFlags(argv: string[]): Flags {
     anneal: DEFAULTS.annealShape,
     annealGens: null,
     mutationWeights: DEFAULTS.mutationWeights,
+    attackDealt: DEFAULTS.attackDealt,
+    attackTaken: DEFAULTS.attackTaken,
+    shapingGens: null,
     crossover: DEFAULTS.crossoverRate,
     survivors: DEFAULTS.survivorFraction,
     tournament: DEFAULTS.tournamentSize,
@@ -191,6 +206,15 @@ function parseFlags(argv: string[]): Flags {
         break
       case '--mutation-mix':
         flags.mutationWeights = parseWeights(value, flags.mutationWeights)
+        break
+      case '--attack-dealt':
+        flags.attackDealt = Number(value)
+        break
+      case '--attack-taken':
+        flags.attackTaken = Number(value)
+        break
+      case '--shaping-gens':
+        flags.shapingGens = Number(value)
         break
       case '--crossover':
         flags.crossover = Number(value)
@@ -258,6 +282,15 @@ function defaultRunId(options: ResolvedOptions): string {
   const mix = Object.values(options.mutationWeights)
   if (mix.join() !== Object.values(DEFAULTS.mutationWeights).join()) {
     parts.push(`mix${mix.join('.')}`)
+  }
+  const shaped =
+    options.attackDealt !== DEFAULTS.attackDealt ||
+    options.attackTaken !== DEFAULTS.attackTaken
+  if (shaped) {
+    parts.push(
+      `atk${options.attackDealt}-${options.attackTaken}` +
+        `${options.shapingGenerations === options.generations ? '' : `over${options.shapingGenerations}`}`,
+    )
   }
   if (options.crossoverRate !== DEFAULTS.crossoverRate) parts.push(`xo${options.crossoverRate}`)
   if (options.survivorFraction !== DEFAULTS.survivorFraction) {
@@ -442,6 +475,9 @@ async function main(): Promise<void> {
     annealShape: flags.anneal,
     ...(flags.annealGens === null ? {} : { annealGenerations: flags.annealGens }),
     mutationWeights: flags.mutationWeights,
+    attackDealt: flags.attackDealt,
+    attackTaken: flags.attackTaken,
+    ...(flags.shapingGens === null ? {} : { shapingGenerations: flags.shapingGens }),
     crossoverRate: flags.crossover,
     survivorFraction: flags.survivors,
     tournamentSize: flags.tournament,
@@ -459,6 +495,15 @@ async function main(): Promise<void> {
           `(seed ${settled.seed}, ${settled.games} boards a generation) against ` +
           settled.opponents.map((opponent) => opponent.id).join(', '),
       )
+      if (
+        settled.attackDealt !== DEFAULTS.attackDealt ||
+        settled.attackTaken !== DEFAULTS.attackTaken
+      ) {
+        say(
+          `attacking games shaped: dealt ${settled.attackDealt}, taken ${settled.attackTaken}, ` +
+            `back to the plain differential by generation ${settled.shapingGenerations}`,
+        )
+      }
     }
     say(header(settled))
   }

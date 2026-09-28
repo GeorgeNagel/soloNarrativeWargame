@@ -13,6 +13,7 @@
 import { UNIT_TYPES } from '../prototypes/tactical/model'
 import type { RoundOrder, UnitType } from '../prototypes/tactical/model'
 import { resolveOptions } from './evolve'
+import { SYMMETRIC_ATTACK } from './game'
 import type { AnnealShape, GenerationReport, ResolvedOptions, RunState } from './evolve'
 import type { Genome } from './genome'
 import { fromOpponentRecord, toOpponentRecord } from './opponents'
@@ -62,6 +63,9 @@ export interface CheckpointOptions {
   tournamentSize: number
   elites: number
   playoffGames: number
+  attackDealt: number
+  attackTaken: number
+  shapingGenerations: number
   opponents: OpponentRecord[]
 }
 
@@ -102,6 +106,9 @@ export function serializeOptions(options: ResolvedOptions): CheckpointOptions {
     tournamentSize: options.tournamentSize,
     elites: options.elites,
     playoffGames: options.playoffGames,
+    attackDealt: options.attackDealt,
+    attackTaken: options.attackTaken,
+    shapingGenerations: options.shapingGenerations,
     opponents: options.opponents.map(toOpponentRecord),
   }
 }
@@ -205,6 +212,15 @@ function parseWeights(value: unknown, what: string): MutationWeights {
     replace: asNumber(record.replace, `${what}.replace`),
     structure: asNumber(record.structure, `${what}.structure`),
   }
+}
+
+/**
+ * A number an older file of the same version may not carry, read as `fallback`.
+ * Fields added without a version bump go through here, so files written before
+ * them still load and behave as they did.
+ */
+function asOptionalNumber(value: unknown, fallback: number, what: string): number {
+  return value === undefined ? fallback : asNumber(value, what)
 }
 
 function asList(value: unknown, what: string): unknown[] {
@@ -337,6 +353,23 @@ export function parseCheckpoint(value: unknown): Checkpoint {
       tournamentSize: asNumber(options.tournamentSize, 'options.tournamentSize'),
       elites: asNumber(options.elites, 'options.elites'),
       playoffGames: asNumber(options.playoffGames, 'options.playoffGames'),
+      // absent from checkpoints written before attack shaping, which scored
+      // attacking games on the plain differential throughout
+      attackDealt: asOptionalNumber(
+        options.attackDealt,
+        SYMMETRIC_ATTACK.dealt,
+        'options.attackDealt',
+      ),
+      attackTaken: asOptionalNumber(
+        options.attackTaken,
+        SYMMETRIC_ATTACK.taken,
+        'options.attackTaken',
+      ),
+      shapingGenerations: asOptionalNumber(
+        options.shapingGenerations,
+        asNumber(options.generations, 'options.generations'),
+        'options.shapingGenerations',
+      ),
       opponents,
     },
     reports: reports as GenerationReport[],
@@ -405,6 +438,8 @@ export function curveCsv(reports: GenerationReport[]): string {
     'rounds',
     'nodes',
     'mutation',
+    'attackDealt',
+    'attackTaken',
     ...opponents.flatMap((opponent) => [`${opponent}.winRate`, `${opponent}.differential`]),
   ]
   const rows = reports.map((report) =>
@@ -416,6 +451,9 @@ export function curveCsv(reports: GenerationReport[]): string {
       report.rounds,
       report.nodes,
       report.mutation,
+      // reports from before attack shaping carry no weights: they were symmetric
+      (report.attack ?? SYMMETRIC_ATTACK).dealt,
+      (report.attack ?? SYMMETRIC_ATTACK).taken,
       ...report.against.flatMap((mark) => [mark.winRate, mark.differential]),
     ].join(','),
   )

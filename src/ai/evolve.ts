@@ -16,7 +16,8 @@
  */
 import { UNIT_TYPES } from '../prototypes/tactical/model'
 import type { RoundOrder, UnitType } from '../prototypes/tactical/model'
-import { DEFAULT_ROUND_CAP } from './game'
+import { DEFAULT_ROUND_CAP, SYMMETRIC_ATTACK } from './game'
+import type { AttackWeights } from './game'
 import { genomeSize, makeGenomeSpecs, randomGenome } from './genome'
 import type { Genome, GenomeSpecs } from './genome'
 import { BASELINE_OPPONENTS } from './opponents'
@@ -79,6 +80,20 @@ export interface EvolveOptions {
   elites?: number
   /** Boards in the final playoff between the generations' leaders. */
   playoffGames?: number
+  /**
+   * What an attacking game pays per unit of enemy strength removed, in
+   * generation 0. It moves linearly to the plain differential's weight by
+   * `shapingGenerations` (see `attackWeightsAt`). The defaults are the plain
+   * differential: no shaping.
+   */
+  attackDealt?: number
+  /** What an attacking game costs per unit of own strength lost, in generation 0. */
+  attackTaken?: number
+  /**
+   * Generations the attack weights take to return to the plain differential,
+   * holding there after. Defaults to the run's length.
+   */
+  shapingGenerations?: number
   /** The fixed commanders every genome is scored against. */
   opponents?: readonly Opponent[]
 }
@@ -107,6 +122,9 @@ export const DEFAULTS: ResolvedOptions = {
   tournamentSize: 2,
   elites: 2,
   playoffGames: 50,
+  attackDealt: SYMMETRIC_ATTACK.dealt,
+  attackTaken: SYMMETRIC_ATTACK.taken,
+  shapingGenerations: 20,
   opponents: BASELINE_OPPONENTS,
 }
 
@@ -137,6 +155,16 @@ export function breedingProblem(options: ResolvedOptions): string | null {
   if (!(Number.isInteger(tournamentSize) && tournamentSize >= 1)) {
     return 'tournament size must be a whole number of at least 1'
   }
+  const { attackDealt, attackTaken, shapingGenerations } = options
+  if (!(attackDealt >= 0) || !(attackTaken >= 0)) {
+    return 'attack weights must be zero or more'
+  }
+  if (attackDealt + attackTaken > 1 + 1e-9) {
+    return 'attack weights must sum to at most 1, or a loss could outscore a win'
+  }
+  if (!(Number.isInteger(shapingGenerations) && shapingGenerations >= 1)) {
+    return 'shaping generations must be a whole number of at least 1'
+  }
   if (Object.values(w).some((weight) => !(weight >= 0))) {
     return 'mutation weights must be zero or more'
   }
@@ -156,6 +184,7 @@ export function resolveOptions(options: EvolveOptions = {}): ResolvedOptions {
     ...merged,
     finalMutationRate: options.finalMutationRate ?? merged.mutationRate,
     annealGenerations: options.annealGenerations ?? merged.generations,
+    shapingGenerations: options.shapingGenerations ?? merged.generations,
   }
   const problem = breedingProblem(resolved)
   if (problem) throw new Error(problem)
@@ -175,6 +204,8 @@ export interface GenerationReport {
   nodes: number
   /** The per-node mutation rate that bred this generation (see `mutationRateAt`). */
   mutation: number
+  /** The attack weights this generation was ranked with (see `attackWeightsAt`). */
+  attack: AttackWeights
   /** The leader's results against each opponent, in the options' order. */
   against: Benchmark[]
 }
@@ -220,6 +251,28 @@ export function mutationRateAt(
   if (start === end) return start
   if (options.annealShape === 'linear') return start + (end - start) * progress
   return start * (end / start) ** progress
+}
+
+/**
+ * The attack weights `generation` is ranked with: `attackDealt` and
+ * `attackTaken` in generation 0, moving in equal steps to the plain
+ * differential's by generation `shapingGenerations` and holding there.
+ *
+ * Shaping is scaffolding. It rewards an attack that hurts the enemy without
+ * breaking it, which is how a lineage gets into contact at all, but a genome
+ * that trades evenly and loses is not what a run is for, so by the end the
+ * ranking is back on the true objective.
+ */
+export function attackWeightsAt(
+  generation: number,
+  options: Pick<ResolvedOptions, 'attackDealt' | 'attackTaken' | 'shapingGenerations'>,
+): AttackWeights {
+  const progress = Math.min(1, Math.max(0, generation / options.shapingGenerations))
+  const toward = (start: number, end: number) => start + (end - start) * progress
+  return {
+    dealt: toward(options.attackDealt, SYMMETRIC_ATTACK.dealt),
+    taken: toward(options.attackTaken, SYMMETRIC_ATTACK.taken),
+  }
 }
 
 /** How much a child may differ from its parents. */
@@ -359,6 +412,7 @@ function report(
     rounds: mean(standings.map((standing) => standing.rounds)),
     nodes: mean(standings.map((standing) => genomeSize(standing.genome))),
     mutation: mutationRateAt(generation, options),
+    attack: attackWeightsAt(generation, options),
     against: leader.against,
   }
 }
@@ -387,6 +441,7 @@ function rank(
       games: options.games,
       seed: seedFrom(options.seed, generation),
       roundCap: options.roundCap,
+      attack: attackWeightsAt(generation, options),
     },
   )
 }
@@ -438,7 +493,9 @@ export function stepRun(
 /**
  * Every generation's leader on one set of boards none of them was ranked on.
  * Scores from different generations were earned on different boards and cannot
- * be compared; this is the comparison that can.
+ * be compared; this is the comparison that can. It is scored on the plain
+ * differential whatever the run's attack shaping, so the champion is picked on
+ * the true objective.
  */
 export function runPlayoff(winners: Genome[], options: ResolvedOptions): Standing[] {
   return runGauntlet(

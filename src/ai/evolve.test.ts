@@ -3,12 +3,14 @@ import { UNIT_TYPES } from '../prototypes/tactical/model'
 import { closeOnNearest, holdFast } from './baseline'
 import {
   DEFAULTS,
+  attackWeightsAt,
   breed,
   evolve,
   initialPopulation,
   mutationRateAt,
   nextGeneration,
   resolveOptions,
+  runPlayoff,
 } from './evolve'
 import type { ResolvedOptions } from './evolve'
 import { makeGenomeSpecs, randomGenome } from './genome'
@@ -257,10 +259,57 @@ describe('mutationRateAt', () => {
   })
 })
 
+describe('attackWeightsAt', () => {
+  const schedule = { attackDealt: 0.7, attackTaken: 0.1, shapingGenerations: 4 }
+
+  it('starts at the given weights and steps evenly to the plain differential', () => {
+    expect(attackWeightsAt(0, schedule).dealt).toBeCloseTo(0.7, 10)
+    expect(attackWeightsAt(0, schedule).taken).toBeCloseTo(0.1, 10)
+    expect(attackWeightsAt(2, schedule).dealt).toBeCloseTo(0.6, 10)
+    expect(attackWeightsAt(2, schedule).taken).toBeCloseTo(0.3, 10)
+    expect(attackWeightsAt(4, schedule).dealt).toBeCloseTo(0.5, 10)
+    expect(attackWeightsAt(4, schedule).taken).toBeCloseTo(0.5, 10)
+  })
+
+  it('holds the plain differential once shaping is done', () => {
+    expect(attackWeightsAt(9, schedule).dealt).toBeCloseTo(0.5, 10)
+    expect(attackWeightsAt(9, schedule).taken).toBeCloseTo(0.5, 10)
+  })
+
+  it('does not shape by default', () => {
+    const options = resolveOptions({ generations: 10 })
+    for (let generation = 0; generation <= 10; generation += 1) {
+      expect(attackWeightsAt(generation, options)).toEqual({ dealt: 0.5, taken: 0.5 })
+    }
+  })
+
+  it('ranks with the shaped weights', () => {
+    const shaped = evolve({ ...SMALL, attackDealt: 1, attackTaken: 0 })
+    const plain = evolve(SMALL)
+    expect(shaped.reports[0].attack).toEqual({ dealt: 1, taken: 0 })
+    // same seed, same generation zero, same boards: only the scoring differs
+    expect(shaped.reports[0].mean).not.toBeCloseTo(plain.reports[0].mean, 10)
+  })
+
+  it('plays the playoff on the plain differential', () => {
+    const winners = population(3)
+    const plain = runPlayoff(winners, SMALL)
+    const shaped = runPlayoff(winners, { ...SMALL, attackDealt: 1, attackTaken: 0 })
+    expect(shaped.map((standing) => standing.score)).toEqual(
+      plain.map((standing) => standing.score),
+    )
+  })
+})
+
 describe('resolveOptions', () => {
   it('anneals over the whole run unless told otherwise', () => {
     expect(resolveOptions({ generations: 37 }).annealGenerations).toBe(37)
     expect(resolveOptions({ generations: 37, annealGenerations: 5 }).annealGenerations).toBe(5)
+  })
+
+  it('shapes over the whole run unless told otherwise', () => {
+    expect(resolveOptions({ generations: 37 }).shapingGenerations).toBe(37)
+    expect(resolveOptions({ generations: 37, shapingGenerations: 5 }).shapingGenerations).toBe(5)
   })
 
   it('ends at the starting rate unless told otherwise', () => {
@@ -271,6 +320,9 @@ describe('resolveOptions', () => {
     expect(() => resolveOptions({ crossoverRate: 1.5 })).toThrow()
     expect(() => resolveOptions({ tournamentSize: 0 })).toThrow()
     expect(() => resolveOptions({ survivorFraction: 0 })).toThrow()
+    expect(() => resolveOptions({ attackDealt: 0.8, attackTaken: 0.3 })).toThrow(/sum/)
+    expect(() => resolveOptions({ attackDealt: -0.1 })).toThrow(/attack/)
+    expect(() => resolveOptions({ shapingGenerations: 0 })).toThrow(/shaping/)
     expect(() => resolveOptions({ finalMutationRate: 0 })).toThrow(/geometric/)
     expect(() =>
       resolveOptions({ finalMutationRate: 0, annealShape: 'linear' }),

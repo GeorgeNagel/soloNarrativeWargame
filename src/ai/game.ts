@@ -163,6 +163,25 @@ export function playGame(
 }
 
 /**
+ * How an attacker's score weighs the damage it dealt against the damage it took.
+ * Each is a fraction of the side's starting strength, so both run from 0 to 1.
+ */
+export interface AttackWeights {
+  dealt: number
+  taken: number
+}
+
+/**
+ * The weights that make an attacker's score the same surviving-strength
+ * differential a defender's is: half of `(1 - foeStrength) - (1 - ownStrength)`
+ * is half of `ownStrength - foeStrength`.
+ */
+export const SYMMETRIC_ATTACK: AttackWeights = {
+  dealt: DIFFERENTIAL_WEIGHT,
+  taken: DIFFERENTIAL_WEIGHT,
+}
+
+/**
  * One side's score for a game: a win or loss, plus a slice of the
  * surviving-strength differential.
  *
@@ -170,9 +189,25 @@ export function playGame(
  * when almost every game is called off and pure win rate would rank a population
  * by who happened to defend. It separates two genomes that both held, or both
  * failed to break through, by how much each kept.
+ *
+ * `attack` reweighs the attacker's side only. Against a line that stands and
+ * shoots, every step of an approach costs more than it deals, so under the plain
+ * differential an attacker that never engages outscores one that tries; weighing
+ * damage dealt above damage taken is what lets a partial attack pay. As long as
+ * `dealt + taken <= 1`, the best loss still cannot outscore the worst win.
  */
-export function scoreFor(outcome: GameOutcome, side: Side): number {
+export function scoreFor(
+  outcome: GameOutcome,
+  side: Side,
+  attack: AttackWeights = SYMMETRIC_ATTACK,
+): number {
   const result = outcome.winner === side ? 1 : 0
+  if (side === outcome.attacker) {
+    const foe: Side = side === 'player' ? 'enemy' : 'player'
+    const dealt = 1 - outcome.strength[foe]
+    const taken = 1 - outcome.strength[side]
+    return result + attack.dealt * dealt - attack.taken * taken
+  }
   const differential =
     side === 'player' ? outcome.differential : -outcome.differential
   return result + DIFFERENTIAL_WEIGHT * differential

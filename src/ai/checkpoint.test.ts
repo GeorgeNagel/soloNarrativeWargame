@@ -224,6 +224,15 @@ describe('parseCheckpoint', () => {
     ).toThrow(/empty/)
   })
 
+  it('reads a checkpoint from before attack shaping as unshaped', () => {
+    const { attackDealt: _d, attackTaken: _t, shapingGenerations: _s, ...older } =
+      checkpoint.options
+    const parsed = parseCheckpoint({ ...checkpoint, options: older })
+    expect(parsed.options.attackDealt).toBe(0.5)
+    expect(parsed.options.attackTaken).toBe(0.5)
+    expect(parsed.options.shapingGenerations).toBe(checkpoint.options.generations)
+  })
+
   it('refuses something that is not a checkpoint at all', () => {
     expect(() => parseCheckpoint(null)).toThrow(/not an object/)
     expect(() => parseCheckpoint({ version: CHECKPOINT_VERSION })).toThrow()

@@ -13,7 +13,7 @@
  */
 import type { Side } from '../prototypes/tactical/model'
 import { DEFAULT_ROUND_CAP, playGame, scoreFor } from './game'
-import type { GameOutcome } from './game'
+import type { AttackWeights, GameOutcome } from './game'
 import { commanderOf } from './genome'
 import type { Genome } from './genome'
 import { makeRng, seedFrom } from './rng'
@@ -54,6 +54,11 @@ export interface GauntletOptions {
   games?: number
   seed?: number
   roundCap?: number
+  /**
+   * How the genome's attacking games are scored (see `scoreFor`). Defaults to
+   * the plain differential; only ranking during a run shapes it.
+   */
+  attack?: AttackWeights
 }
 
 interface Tally {
@@ -69,8 +74,13 @@ function emptyTally(): Tally {
   return { score: 0, games: 0, wins: 0, losses: 0, differential: 0, rounds: 0 }
 }
 
-function credit(tally: Tally, outcome: GameOutcome, side: Side): void {
-  tally.score += scoreFor(outcome, side)
+function credit(
+  tally: Tally,
+  outcome: GameOutcome,
+  side: Side,
+  attack: AttackWeights | undefined,
+): void {
+  tally.score += scoreFor(outcome, side, attack)
   tally.games += 1
   tally.rounds += outcome.rounds
   tally.differential +=
@@ -104,7 +114,7 @@ export function benchmark(
       const outcome = asPlayer
         ? playGame(subject, opponent, scenario, dice, { roundCap })
         : playGame(opponent, subject, scenario, dice, { roundCap })
-      credit(tally, outcome, asPlayer ? 'player' : 'enemy')
+      credit(tally, outcome, asPlayer ? 'player' : 'enemy', options.attack)
     }
   }
 

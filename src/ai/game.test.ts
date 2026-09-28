@@ -6,7 +6,7 @@ import {
 } from '../prototypes/tactical/model'
 import type { UnitState } from '../prototypes/tactical/model'
 import { closeOnNearest, holdFast } from './baseline'
-import { DEFAULT_ROUND_CAP, playGame, scoreFor } from './game'
+import { DEFAULT_ROUND_CAP, SYMMETRIC_ATTACK, playGame, scoreFor } from './game'
 import type { GameOutcome } from './game'
 import { commanderOf, ordersFor, randomGenome } from './genome'
 import { makeRng, seedFrom } from './rng'
@@ -153,7 +153,9 @@ describe('scoreFor', () => {
       attacker: 'player',
       objective: 'hold',
       kills: { player: 0, enemy: 0 },
-      strength: { player: 0, enemy: 0 },
+      // any pair of strengths with this difference; the attacker is scored on
+      // the strengths, the defender on the differential
+      strength: { player: (1 + differential) / 2, enemy: (1 - differential) / 2 },
       differential,
       timedOut: false,
       roster: { player: 3, enemy: 3 },
@@ -189,6 +191,50 @@ describe('scoreFor', () => {
     expect(scoreFor(outcome('enemy', 0.5), 'player')).toBeGreaterThan(
       scoreFor(outcome('enemy', -0.5), 'player'),
     )
+  })
+
+  describe('with attack weights', () => {
+    function attack(
+      winner: GameOutcome['winner'],
+      strength: GameOutcome['strength'],
+    ): GameOutcome {
+      return { ...outcome(winner, strength.player - strength.enemy), strength }
+    }
+    const shaped = { dealt: 0.6, taken: 0.1 }
+
+    it('scores the same as the plain differential when symmetric', () => {
+      for (const [p, e] of [[1, 0.2], [0.3, 0.9], [0.5, 0.5]]) {
+        const game = attack('enemy', { player: p, enemy: e })
+        expect(scoreFor(game, 'player', SYMMETRIC_ATTACK)).toBeCloseTo(
+          0.5 * game.differential,
+          10,
+        )
+      }
+    })
+
+    it('pays a losing attack that hurt the defender more than one that stayed home', () => {
+      const stayedHome = attack('enemy', { player: 1, enemy: 1 })
+      const bloodied = attack('enemy', { player: 0.4, enemy: 0.7 })
+      // the plain differential prefers staying home...
+      expect(scoreFor(bloodied, 'player')).toBeLessThan(scoreFor(stayedHome, 'player'))
+      // ...shaping does not
+      expect(scoreFor(bloodied, 'player', shaped)).toBeGreaterThan(
+        scoreFor(stayedHome, 'player', shaped),
+      )
+    })
+
+    it('leaves the defender on the plain differential', () => {
+      const game = attack('enemy', { player: 0.4, enemy: 0.7 })
+      expect(scoreFor(game, 'enemy', shaped)).toBe(scoreFor(game, 'enemy'))
+    })
+
+    it('never pays the best loss more than the worst win', () => {
+      const bestLoss = attack('enemy', { player: 1, enemy: 0 })
+      const worstWin = attack('player', { player: 0, enemy: 0 })
+      expect(scoreFor(worstWin, 'player', shaped)).toBeGreaterThanOrEqual(
+        scoreFor(bestLoss, 'player', shaped),
+      )
+    })
   })
 })
 

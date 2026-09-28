@@ -173,6 +173,42 @@ npm run evolve -- --gens 60 --mutation 0.4 --mutation-end 0.05 --anneal-gens 40
 The schedule is saved in checkpoints, so a resumed run carried past its original
 length keeps the schedule it started with rather than stretching it.
 
+### Attack shaping
+
+Against a line that stands and shoots, the plain score gives an attacker no
+gradient toward attacking. An advancing unit cannot shoot, so every step of an
+approach costs more than it deals; a genome that stays out of range and loses
+scores 0, and one that closes in and loses scores below 0. Selection keeps the
+one that stays home, and a working attack would have to appear in a single jump.
+
+`--attack-dealt` and `--attack-taken` split the attacker's differential into its
+two halves and weigh them separately:
+
+```
+attacker score = win + dealt * (1 - foeStrength) - taken * (1 - ownStrength)
+```
+
+At 0.5 and 0.5, the defaults, this is exactly the plain differential. Weighing
+damage dealt above damage taken lets a losing attack that hurt the defender
+outscore one that never engaged. The two must sum to at most 1, so the best
+loss still cannot outscore the worst win. The defender is always scored on the
+plain differential: standing and shooting is correct play for it.
+
+Shaping is scaffolding. The weights move in equal steps from the given values
+in generation 0 back to 0.5 and 0.5 by generation `--shaping-gens` (the whole
+run, by default), so a lineage is pulled into contact early and ranked on the
+true objective by the end. The playoff always scores on the plain differential,
+so the champion is chosen on what the game actually asks for.
+
+```
+npm run evolve -- --gens 60 --attack-dealt 0.8 --attack-taken 0.1 --shaping-gens 40
+```
+
+While shaping is on, `best`, `mean` and `worst` are shaped scores and are not
+comparable with an unshaped run's. The weights each generation was ranked with
+are written to `curve.csv`. Checkpoints written before shaping existed load as
+unshaped.
+
 ### Unreachable branches
 
 Crossover freely grafts a test that a branch above it has already decided — a
