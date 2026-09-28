@@ -2,26 +2,30 @@
  * Reading and writing a run.
  *
  * A checkpoint is a whole `RunState` written down: the ranked population, the
- * curve so far, and the generator's state, which is what lets a resumed run
- * carry on the same stream instead of starting a new one. Everything in a genome
- * is already plain data, so a checkpoint is plain JSON and needs no revival step
- * beyond being checked.
+ * curve so far, every generation's leader, the opponents, and the generator's
+ * state, which is what lets a resumed run carry on the same stream instead of
+ * starting a new one. Everything in a genome is already plain data, so a
+ * checkpoint is plain JSON and needs no revival step beyond being checked.
  *
  * These files are committed, so they are also hand-editable, and everything
  * loaded from one is validated rather than trusted.
  */
 import { UNIT_TYPES } from '../prototypes/tactical/model'
 import type { RoundOrder, UnitType } from '../prototypes/tactical/model'
-import { BASELINES, baselineById } from './baseline'
 import { resolveOptions } from './evolve'
 import type { GenerationReport, ResolvedOptions, RunState } from './evolve'
 import type { Genome } from './genome'
+import { fromOpponentRecord, toOpponentRecord } from './opponents'
+import type { OpponentRecord } from './opponents'
 import { rngFromState } from './rng'
-import type { Standing } from './tournament'
+import type { Benchmark, Standing } from './tournament'
 import type { Tree } from './tree'
 
-/** Bumped when the shape below changes in a way older files cannot be read as. */
-export const CHECKPOINT_VERSION = 1
+/**
+ * Bumped when the shape below changes in a way older files cannot be read as.
+ * Version 1 was the round robin, scored genome against genome.
+ */
+export const CHECKPOINT_VERSION = 2
 
 /** A ranking row, pointing at the population entry of the same index. */
 export interface StandingRecord {
@@ -33,23 +37,26 @@ export interface StandingRecord {
   losses: number
   differential: number
   rounds: number
-  selfGames: number
-  selfSideBias: number
+  against: Benchmark[]
 }
 
-/** `ResolvedOptions` with the baselines named rather than held. */
+/**
+ * `ResolvedOptions` with the opponents written out: baselines by name, saved
+ * genomes in full, so a resumed run plays exactly what the first part played
+ * even if opponents have been saved since.
+ */
 export interface CheckpointOptions {
   populationSize: number
   generations: number
-  gamesPerPairing: number
+  games: number
   seed: number
   roundCap: number
   maxDepth: number
   mutationRate: number
   survivorFraction: number
   elites: number
-  benchmarkGames: number
-  baselines: string[]
+  playoffGames: number
+  opponents: OpponentRecord[]
 }
 
 export interface Checkpoint {
@@ -63,6 +70,8 @@ export interface Checkpoint {
   options: CheckpointOptions
   /** One report per generation so far, oldest first. */
   reports: GenerationReport[]
+  /** Every generation's leader so far, for the playoff at the end. */
+  winners: Genome[]
   /** The population in ranked order — `population[0]` is the leader. */
   population: Genome[]
   /** The ranking, row `i` describing `population[i]`. */
@@ -73,15 +82,15 @@ export function serializeOptions(options: ResolvedOptions): CheckpointOptions {
   return {
     populationSize: options.populationSize,
     generations: options.generations,
-    gamesPerPairing: options.gamesPerPairing,
+    games: options.games,
     seed: options.seed,
     roundCap: options.roundCap,
     maxDepth: options.maxDepth,
     mutationRate: options.mutationRate,
     survivorFraction: options.survivorFraction,
     elites: options.elites,
-    benchmarkGames: options.benchmarkGames,
-    baselines: options.baselines.map((opponent) => opponent.id),
+    playoffGames: options.playoffGames,
+    opponents: options.opponents.map(toOpponentRecord),
   }
 }
 
@@ -94,15 +103,10 @@ export function deserializeOptions(
   saved: CheckpointOptions,
   overrides: Partial<ResolvedOptions> = {},
 ): ResolvedOptions {
-  const baselines = saved.baselines.map((id) => {
-    const opponent = baselineById(id)
-    if (!opponent) throw new Error(`checkpoint names an unknown baseline: ${id}`)
-    return opponent
-  })
-  const { baselines: _named, ...rest } = saved
+  const { opponents, ...rest } = saved
   return resolveOptions({
     ...rest,
-    baselines: baselines.length > 0 ? baselines : BASELINES,
+    opponents: opponents.map(fromOpponentRecord),
     ...overrides,
   })
 }
@@ -119,6 +123,7 @@ export function toCheckpoint(
     rngState: state.rng.state(),
     options: serializeOptions(options),
     reports: state.reports,
+    winners: state.winners,
     population: state.standings.map((standing) => standing.genome),
     standings: state.standings.map((standing) => ({
       id: standing.genome.id,
@@ -129,8 +134,7 @@ export function toCheckpoint(
       losses: standing.losses,
       differential: standing.differential,
       rounds: standing.rounds,
-      selfGames: standing.selfGames,
-      selfSideBias: standing.selfSideBias,
+      against: standing.against,
     })),
   }
 }
@@ -141,25 +145,15 @@ export function fromCheckpoint(
   overrides: Partial<ResolvedOptions> = {},
 ): { state: RunState; options: ResolvedOptions } {
   const standings: Standing[] = checkpoint.population.map((genome, index) => {
-    const record = checkpoint.standings[index]
-    return {
-      genome,
-      score: record.score,
-      games: record.games,
-      wins: record.wins,
-      draws: record.draws,
-      losses: record.losses,
-      differential: record.differential,
-      rounds: record.rounds,
-      selfGames: record.selfGames,
-      selfSideBias: record.selfSideBias,
-    }
+    const { id: _id, ...record } = checkpoint.standings[index]
+    return { genome, ...record }
   })
   return {
     state: {
       generation: checkpoint.generation,
       standings,
       reports: checkpoint.reports,
+      winners: checkpoint.winners,
       rng: rngFromState(checkpoint.rngState),
     },
     options: deserializeOptions(checkpoint.options, overrides),
@@ -188,6 +182,11 @@ function asNumber(value: unknown, what: string): number {
 
 function asString(value: unknown, what: string): string {
   if (typeof value !== 'string') fail(`${what} is not a string`)
+  return value
+}
+
+function asList(value: unknown, what: string): unknown[] {
+  if (!Array.isArray(value)) fail(`${what} is not a list`)
   return value
 }
 
@@ -243,27 +242,55 @@ export function parseGenome(value: unknown): Genome {
   }
 }
 
+function parseBenchmark(value: unknown, what: string): Benchmark {
+  const mark = asRecord(value, what)
+  return {
+    opponent: asString(mark.opponent, `${what}.opponent`),
+    games: asNumber(mark.games, `${what}.games`),
+    wins: asNumber(mark.wins, `${what}.wins`),
+    draws: asNumber(mark.draws, `${what}.draws`),
+    losses: asNumber(mark.losses, `${what}.losses`),
+    winRate: asNumber(mark.winRate, `${what}.winRate`),
+    score: asNumber(mark.score, `${what}.score`),
+    differential: asNumber(mark.differential, `${what}.differential`),
+    rounds: asNumber(mark.rounds, `${what}.rounds`),
+  }
+}
+
+function parseOpponentRecord(value: unknown, what: string): OpponentRecord {
+  const record = asRecord(value, what)
+  return {
+    id: asString(record.id, `${what}.id`),
+    genome: record.genome === null ? null : parseGenome(record.genome),
+  }
+}
+
 /** Check a checkpoint read off disk, field by field. */
 export function parseCheckpoint(value: unknown): Checkpoint {
   const checkpoint = asRecord(value, 'the checkpoint')
   const version = asNumber(checkpoint.version, 'version')
   if (version !== CHECKPOINT_VERSION) {
     throw new Error(
-      `checkpoint is version ${version}, this build reads version ${CHECKPOINT_VERSION}`,
+      `checkpoint is version ${version}, this build reads version ${CHECKPOINT_VERSION}` +
+        (version === 1
+          ? ' (version 1 checkpoints come from the round-robin fitness and cannot be resumed)'
+          : ''),
     )
   }
-  if (!Array.isArray(checkpoint.population)) fail('population is not a list')
-  if (!Array.isArray(checkpoint.standings)) fail('standings is not a list')
-  if (!Array.isArray(checkpoint.reports)) fail('reports is not a list')
-  if (checkpoint.population.length !== checkpoint.standings.length) {
+  const population = asList(checkpoint.population, 'population')
+  const standings = asList(checkpoint.standings, 'standings')
+  const reports = asList(checkpoint.reports, 'reports')
+  const winners = asList(checkpoint.winners, 'winners')
+  if (population.length !== standings.length) {
     fail('population and standings are different lengths')
   }
-  if (checkpoint.population.length === 0) fail('population is empty')
+  if (population.length === 0) fail('population is empty')
 
   const options = asRecord(checkpoint.options, 'options')
-  const baselines = Array.isArray(options.baselines)
-    ? options.baselines.map((id, index) => asString(id, `options.baselines[${index}]`))
-    : fail('options.baselines is not a list')
+  const opponents = asList(options.opponents, 'options.opponents').map((record, index) =>
+    parseOpponentRecord(record, `options.opponents[${index}]`),
+  )
+  if (opponents.length === 0) fail('options.opponents is empty')
 
   return {
     version,
@@ -273,31 +300,34 @@ export function parseCheckpoint(value: unknown): Checkpoint {
     options: {
       populationSize: asNumber(options.populationSize, 'options.populationSize'),
       generations: asNumber(options.generations, 'options.generations'),
-      gamesPerPairing: asNumber(options.gamesPerPairing, 'options.gamesPerPairing'),
+      games: asNumber(options.games, 'options.games'),
       seed: asNumber(options.seed, 'options.seed'),
       roundCap: asNumber(options.roundCap, 'options.roundCap'),
       maxDepth: asNumber(options.maxDepth, 'options.maxDepth'),
       mutationRate: asNumber(options.mutationRate, 'options.mutationRate'),
       survivorFraction: asNumber(options.survivorFraction, 'options.survivorFraction'),
       elites: asNumber(options.elites, 'options.elites'),
-      benchmarkGames: asNumber(options.benchmarkGames, 'options.benchmarkGames'),
-      baselines,
+      playoffGames: asNumber(options.playoffGames, 'options.playoffGames'),
+      opponents,
     },
-    reports: checkpoint.reports as GenerationReport[],
-    population: checkpoint.population.map(parseGenome),
-    standings: checkpoint.standings.map((row, index) => {
-      const record = asRecord(row, `standings[${index}]`)
+    reports: reports as GenerationReport[],
+    winners: winners.map(parseGenome),
+    population: population.map(parseGenome),
+    standings: standings.map((row, index) => {
+      const what = `standings[${index}]`
+      const record = asRecord(row, what)
       return {
-        id: asString(record.id, `standings[${index}].id`),
-        score: asNumber(record.score, `standings[${index}].score`),
-        games: asNumber(record.games, `standings[${index}].games`),
-        wins: asNumber(record.wins, `standings[${index}].wins`),
-        draws: asNumber(record.draws, `standings[${index}].draws`),
-        losses: asNumber(record.losses, `standings[${index}].losses`),
-        differential: asNumber(record.differential, `standings[${index}].differential`),
-        rounds: asNumber(record.rounds, `standings[${index}].rounds`),
-        selfGames: asNumber(record.selfGames, `standings[${index}].selfGames`),
-        selfSideBias: asNumber(record.selfSideBias, `standings[${index}].selfSideBias`),
+        id: asString(record.id, `${what}.id`),
+        score: asNumber(record.score, `${what}.score`),
+        games: asNumber(record.games, `${what}.games`),
+        wins: asNumber(record.wins, `${what}.wins`),
+        draws: asNumber(record.draws, `${what}.draws`),
+        losses: asNumber(record.losses, `${what}.losses`),
+        differential: asNumber(record.differential, `${what}.differential`),
+        rounds: asNumber(record.rounds, `${what}.rounds`),
+        against: asList(record.against, `${what}.against`).map((mark, at) =>
+          parseBenchmark(mark, `${what}.against[${at}]`),
+        ),
       }
     }),
   }
@@ -336,9 +366,9 @@ export function checkpointName(generation: number): string {
   return `gen-${String(generation).padStart(4, '0')}.json`
 }
 
-/** The curve as CSV, one row per generation. */
+/** The curve as CSV, one row per generation, with the leader's line per opponent. */
 export function curveCsv(reports: GenerationReport[]): string {
-  const baselines = reports[0]?.benchmarks.map((mark) => mark.opponent) ?? []
+  const opponents = reports[0]?.against.map((mark) => mark.opponent) ?? []
   const header = [
     'generation',
     'best',
@@ -346,8 +376,7 @@ export function curveCsv(reports: GenerationReport[]): string {
     'worst',
     'rounds',
     'nodes',
-    'sideBias',
-    ...baselines.flatMap((opponent) => [`${opponent}.winRate`, `${opponent}.differential`]),
+    ...opponents.flatMap((opponent) => [`${opponent}.winRate`, `${opponent}.differential`]),
   ]
   const rows = reports.map((report) =>
     [
@@ -357,8 +386,7 @@ export function curveCsv(reports: GenerationReport[]): string {
       report.worst,
       report.rounds,
       report.nodes,
-      report.sideBias,
-      ...report.benchmarks.flatMap((mark) => [mark.winRate, mark.differential]),
+      ...report.against.flatMap((mark) => [mark.winRate, mark.differential]),
     ].join(','),
   )
   return [header.join(','), ...rows, ''].join('\n')

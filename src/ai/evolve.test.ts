@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { UNIT_TYPES } from '../prototypes/tactical/model'
-import { holdFast } from './baseline'
+import { closeOnNearest, holdFast } from './baseline'
 import {
   breed,
   evolve,
@@ -12,7 +12,7 @@ import type { ResolvedOptions } from './evolve'
 import { makeGenomeSpecs, randomGenome } from './genome'
 import type { Genome } from './genome'
 import { makeRng } from './rng'
-import { benchmark, runTournament } from './tournament'
+import { benchmark, runGauntlet } from './tournament'
 import { depthOf } from './tree'
 import type { Tree } from './tree'
 
@@ -25,10 +25,10 @@ function population(size: number, seed = 1): Genome[] {
 const SMALL: ResolvedOptions = resolveOptions({
   populationSize: 6,
   generations: 1,
-  gamesPerPairing: 1,
+  games: 1,
   maxDepth: 4,
   roundCap: 8,
-  benchmarkGames: 0,
+  playoffGames: 1,
 })
 
 /** All five of a genome's trees, for the shape assertions. */
@@ -50,9 +50,10 @@ describe('initialPopulation', () => {
   })
 })
 
-describe('runTournament', () => {
-  const standings = runTournament(population(5), {
-    gamesPerPairing: 1,
+describe('runGauntlet', () => {
+  const opponents = [closeOnNearest, holdFast]
+  const standings = runGauntlet(population(5), opponents, {
+    games: 2,
     seed: 3,
     roundCap: 8,
   })
@@ -63,30 +64,41 @@ describe('runTournament', () => {
     }
   })
 
-  it('gives every genome the same number of games', () => {
-    const games = new Set(standings.map((standing) => standing.games))
-    expect(games.size).toBe(1)
-  })
-
-  it('splits the points, so the mean score is pinned at a half', () => {
-    // every game hands out exactly one point between its two sides, so this is
-    // an invariant of the round robin, not a property of the population
-    const mean =
-      standings.reduce((total, standing) => total + standing.score, 0) /
-      standings.length
-    expect(mean).toBeCloseTo(0.5, 10)
-  })
-
-  it('counts each genome a win, draw or loss for every game it played', () => {
+  it('plays every opponent from both sides of every board', () => {
     for (const standing of standings) {
+      expect(standing.games).toBe(2 * 2 * opponents.length)
       expect(standing.wins + standing.draws + standing.losses).toBe(standing.games)
-      expect(standing.selfGames).toBeGreaterThan(0)
+      expect(standing.against.map((mark) => mark.opponent)).toEqual(
+        opponents.map((opponent) => opponent.id),
+      )
     }
   })
 
+  it('weighs every opponent the same', () => {
+    for (const standing of standings) {
+      const mean =
+        standing.against.reduce((total, mark) => total + mark.score, 0) /
+        standing.against.length
+      expect(standing.score).toBeCloseTo(mean, 10)
+    }
+  })
+
+  it('plays every opponent on the same boards', () => {
+    // two opponents that play identically can only get identical results if
+    // they met the genome on the same boards with the same dice
+    const twin = { ...holdFast, id: 'twin' }
+    const [standing] = runGauntlet(population(1), [holdFast, twin], {
+      games: 2,
+      seed: 3,
+      roundCap: 8,
+    })
+    const [a, b] = standing.against
+    expect({ ...b, opponent: a.opponent }).toEqual(a)
+  })
+
   it('replays identically from the same seed', () => {
-    const again = runTournament(population(5), {
-      gamesPerPairing: 1,
+    const again = runGauntlet(population(5), opponents, {
+      games: 2,
       seed: 3,
       roundCap: 8,
     })
@@ -98,11 +110,8 @@ describe('runTournament', () => {
     )
   })
 
-  it('finds little side bias in the mirrored scenarios', () => {
-    const bias =
-      standings.reduce((total, standing) => total + standing.selfSideBias, 0) /
-      standings.length
-    expect(Math.abs(bias)).toBeLessThan(0.2)
+  it('refuses to run with no opponents', () => {
+    expect(() => runGauntlet(population(2), [])).toThrow(/at least one opponent/)
   })
 })
 
@@ -132,8 +141,8 @@ describe('breed', () => {
 })
 
 describe('nextGeneration', () => {
-  const standings = runTournament(population(6), {
-    gamesPerPairing: 1,
+  const standings = runGauntlet(population(6), [holdFast], {
+    games: 1,
     seed: 4,
     roundCap: 8,
   })
@@ -168,8 +177,8 @@ describe('nextGeneration', () => {
   })
 
   it('always keeps at least two parents, however small the population', () => {
-    const tiny = runTournament(population(2), {
-      gamesPerPairing: 1,
+    const tiny = runGauntlet(population(2), [holdFast], {
+      games: 1,
       seed: 5,
       roundCap: 6,
     })
@@ -183,7 +192,6 @@ describe('evolve', () => {
     const result = evolve({ ...SMALL, generations: 2 })
     expect(result.reports.map((report) => report.generation)).toEqual([0, 1, 2])
     expect(result.standings.length).toBe(SMALL.populationSize)
-    expect(result.champion).toBe(result.standings[0].genome)
   })
 
   it('replays identically from the same seed', () => {
@@ -196,23 +204,32 @@ describe('evolve', () => {
   it('takes a different course from a different seed', () => {
     const a = evolve({ ...SMALL, generations: 2, seed: 11 })
     const b = evolve({ ...SMALL, generations: 2, seed: 12 })
-    expect(JSON.stringify(b.champion)).not.toBe(JSON.stringify(a.champion))
+    expect(JSON.stringify(b.reports)).not.toBe(JSON.stringify(a.reports))
   })
 
-  it('benchmarks the leader when it is asked to', () => {
-    const result = evolve({ ...SMALL, generations: 1, benchmarkGames: 2 })
+  it('reports the leader against every opponent', () => {
+    const result = evolve({ ...SMALL, generations: 1 })
     for (const report of result.reports) {
-      expect(report.benchmarks.length).toBe(result.options.baselines.length)
-      for (const mark of report.benchmarks) {
+      expect(report.against.map((mark) => mark.opponent)).toEqual(
+        result.options.opponents.map((opponent) => opponent.id),
+      )
+      for (const mark of report.against) {
         expect(mark.winRate).toBeGreaterThanOrEqual(0)
         expect(mark.winRate).toBeLessThanOrEqual(1)
       }
     }
   })
 
-  it('leaves the benchmarks out when it is not', () => {
-    const result = evolve({ ...SMALL, generations: 1, benchmarkGames: 0 })
-    expect(result.reports[0].benchmarks).toEqual([])
+  it('keeps every generation leader once, and crowns the playoff winner', () => {
+    const result = evolve({ ...SMALL, generations: 3 })
+    const leaders = [...new Set(result.reports.map((report) => report.bestId))]
+    expect(result.playoff.map((standing) => standing.genome.id).sort()).toEqual(
+      leaders.sort(),
+    )
+    expect(result.champion).toBe(result.playoff[0].genome)
+    for (const standing of result.playoff) {
+      expect(standing.games).toBe(SMALL.playoffGames * 2 * SMALL.opponents.length)
+    }
   })
 })
 

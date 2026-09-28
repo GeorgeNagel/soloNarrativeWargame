@@ -1,9 +1,10 @@
 # Genetic AI
 
 A genetic algorithm that breeds decision-tree commanders for the tactical game.
-A generation plays a round robin — every AI against every other AI and against
-itself, several games per pairing — ranks the population, and lets the top half
-reproduce. The code is in `src/ai/`; `npm run evolve` runs it.
+A generation plays a gauntlet — every AI against every fixed opponent, on a fresh
+set of boards — ranks the population, and lets the top half reproduce. At the end,
+every generation's leader plays a playoff and the winner can be saved as a new
+named opponent. The code is in `src/ai/`; `npm run evolve` runs it.
 
 ## A genome
 
@@ -62,13 +63,54 @@ drops the hexes whose mirror is off the board rather than distorting the mirror.
 
 ## A generation
 
-1. **Round robin.** Every pairing `(i, j)` with `i <= j`, self-play included,
-   plays `--games` scenarios. Each scenario is played twice, once with each
-   genome on the player side, over the same board and the same dice seed.
-2. **Ranking**, by mean score per game, ties broken by mean differential.
+1. **Gauntlet.** `--games` boards are drawn for the generation, seeded from the
+   run's seed and the generation number. Every genome plays every opponent on
+   those same boards, each board twice — once from each side. Genomes never play
+   each other.
+2. **Ranking**, by mean score per game over all opponents, ties broken by mean
+   differential. Every opponent gets the same number of games, so each weighs
+   the same.
 3. **Reproduction.** The top half survives. The best `--elites` genomes carry
    over untouched; the rest of the population is children of two survivors, each
    drawn by a binary tournament so a better rank breeds more often.
+4. **The leader is kept aside** for the playoff, once — an elite that leads
+   several generations running is entered the first time only.
+
+A generation costs `pop × opponents × games × 2` games: 24 × 2 × 12 × 2 = 1,152
+with the defaults. It grows linearly with the population and with each saved
+opponent.
+
+### Fresh boards, and the playoff
+
+Every generation draws new boards, so a carried-over leader has to beat boards it
+has never seen to stay on top, which keeps a run from fitting itself to one board
+set. The price is that a score from one generation is not comparable with a score
+from the next: the best score can drop even though the elite that earned it was
+carried over unchanged. More boards (`--games`) make that drop smaller.
+
+Because of that, the champion is not simply the last generation's leader. When the
+run ends, every generation's leader plays the opponents again on one set of
+`--playoff` boards that none of them was ranked on, and the best of those is the
+champion.
+
+## Opponents
+
+A run plays two hand-written baselines (below) and **every saved opponent** in
+`artifacts/opponents/`. At the end of a run in a terminal, `npm run evolve` asks
+
+```
+Save champion as a named opponent? [Y/n]
+Name [3f2a1c4e-9b7d-4e21-8a55-0c6f1d2e3b4a]:
+```
+
+and an empty name takes the generated one. Names are lowercase letters, digits
+and single hyphens, and may not reuse a baseline's name or a saved one. Without a
+terminal nothing is saved unless `--save-as NAME` was passed. The file holds the
+genome, the run it came from, and its playoff results.
+
+Every later run plays it, so each champion kept makes the set the next one has to
+beat harder. `npm run ai:play -- --vs NAME` plays against one by name. To retire
+one, delete its file.
 
 A child is bred **tree by tree**: each of the five trees is crossed over with its
 counterpart on its own — a subtree of one parent's cavalry tree replaces a subtree
@@ -85,8 +127,9 @@ Crossover freely grafts a test that a branch above it has already decided — a
 `foeCanShoot < 0.5` below the branch that took the `foeCanShoot >= 0.5` side,
 say. Everything behind that test is then unreachable: no feature vector can get
 there. Evolution neither removes these nor is troubled by them, and they
-accumulate — in the run below they grow from 3% of the population's nodes at
-generation 0 to 12% by generation 40, and the champion carries 19%.
+accumulate — in a 40-generation run under the earlier round-robin fitness they
+grew from 3% of the population's nodes at generation 0 to 12% by generation 40,
+and the champion carried 19%.
 
 They are not a correctness problem for play, because an unreachable branch is
 never evaluated. They are a problem for *reading* a genome, so `describeGenome`
@@ -97,40 +140,40 @@ champion's line and the table do not have to agree.
 ## Reading a run
 
 ```
-$ npm run evolve -- --pop 24 --gens 40 --games 2
-gen  best    mean    worst   rounds  nodes   bias     close-on-nearest  hold-fast
-0    0.710   0.500   0.408   27.0    40.8    -0.004   0.354  0.500
-10   0.587   0.500   0.366   22.4    24.1    -0.026   0.563  0.500
-20   0.541   0.500   0.428   22.1    28.8    0.008    0.813  0.500
-30   0.584   0.500   0.395   18.8    24.5    0.009    0.750  0.500
-40   0.602   0.500   0.357   18.3    23.5    -0.064   0.813  0.604
+$ npm run evolve
+gen  best    mean    worst   rounds  nodes   close-on-nearest hold-fast
+0    0.571   0.393   0.268   22.2    40.8    0.625            0.500
+5    0.702   0.580   0.388   19.9    36.9    0.854            0.500
+10   0.685   0.579   0.382   21.9    32.0    0.833            0.500
+15   0.716   0.613   0.446   21.6    31.5    0.896            0.500
+20   0.663   0.554   0.481   21.5    30.8    0.792            0.500
 
-champion g40-8 — 37 nodes, 143.6s
-  vs close-on-nearest   32W 5D 3L — win rate 0.863, differential 0.184
-  vs hold-fast          6W 34D 0L — win rate 0.575, differential 0.087
+playoff: 17 generation leaders over 50 new boards
+  1   g3-12      gen 3    score 0.640  61W 127D 12L
+  2   g9-17      gen 9    score 0.636  62W 124D 14L
+  3   g8-21      gen 8    score 0.630  60W 126D 14L
+  ...
+
+champion g3-12 (generation 3) - 19 nodes, 72.5s
+  vs close-on-nearest  61W 27D 12L - win rate 0.745, differential 0.137
+  vs hold-fast         0W 100D 0L - win rate 0.500, differential 0.000
 ```
 
-That run is the shape to expect: the charge baseline is beaten decisively by
-generation 20, the static line holds the evolved army to draws for thirty
-generations, and only late on does the champion start taking games off it without
-ever losing one. Forty generations of 24 genomes is about two and a half minutes.
+In that run the mean rises from 0.39 to around 0.6 within a few generations, and
+the population beats the charge baseline decisively but never takes a game off
+`hold-fast`: every game against it is a draw (see below). The playoff picks a
+generation-3 leader over later ones, which is the playoff doing its job: the
+later leaders' higher per-generation scores were partly the boards they drew.
+Twenty generations of 24 genomes is a little over a minute.
 
-**The mean score is pinned at 0.500 and always will be** — every game hands out
-exactly one point between its two sides, so the mean is an invariant of the round
-robin, not a measure of the population. Fitness here is purely relative: a genome
-is only ever scored against its own generation, so `best` says how far the leader
-is ahead of its own contemporaries, not whether the population is improving.
+`best`, `mean` and `worst` are scores against the fixed opponents — a win, draw or
+loss plus a quarter of the differential, averaged over every game — so they are
+absolute: a rising `mean` is the population improving. They are measured on that
+generation's boards, so they move with the draw of boards as well; the columns to
+the right are the leader's win rate against each opponent on the same boards.
 
-The two right-hand columns are the absolute curve: the leader's win rate against
-each fixed commander in `src/ai/baseline.ts`, over one set of scenarios that never
-changes between generations. Those games never feed back into selection, so there
-is nothing for the population to overfit to.
-
-`bias` is the mean differential in the self-play games. Because both sides are the
-same genome on a mirrored board, anything much away from zero would mean the
-player side carries an advantage — a useful check that the scenario generator and
-the rules are even-handed. The dice are consumed in roster order, so player units
-roll first, which is the one asymmetry left; it measures as noise.
+The playoff table ranks the generation leaders on boards none of them has seen,
+and its winner is the champion printed below it.
 
 ## The baselines, and what they say about the rules
 
@@ -153,7 +196,9 @@ committed to the repository — `artifacts/README.md` has the layout, and
 `src/ai/checkpoint.ts` the code.
 
 A **checkpoint** is a whole paused run: the ranked population, the curve so far,
-and the random generator's state. That last part is what makes resuming exact
+every generation's leader, the opponents — saved ones in full, so an opponent
+saved since does not change a resumed run — and the random generator's state.
+That last part is what makes resuming exact
 rather than approximate — a run stopped at generation 20 and resumed is identical
 to one that never stopped, which `src/ai/checkpoint.test.ts` asserts by running
 both and comparing. Checkpoints land every `--every` generations and always at the
@@ -166,7 +211,9 @@ npm run evolve -- --resume artifacts/runs/<run-id>/checkpoints/gen-0040.json --g
 Everything but the generation count is taken from the checkpoint. Changing the
 population size or the scoring mid-run would make the curve meaningless, so those
 flags are ignored when resuming. A resumed run writes back into the run directory
-it came from, so its later checkpoints sit next to the earlier ones.
+it came from, so its later checkpoints sit next to the earlier ones. Checkpoints
+written under the earlier round-robin fitness (version 1) cannot be resumed; their
+`champion.json` files still play under `ai:play`.
 
 Genomes are plain data — trees of numbers and orders — so nothing needs reviving
 on load. Everything read off disk is **validated** rather than trusted, since these
@@ -184,7 +231,7 @@ npm run ai:play -- --genome artifacts/runs/<run-id>/champion.json --vs hold-fast
 npm run ai:play -- --genome artifacts/runs/<run-id>/champion.json --trace --describe
 ```
 
-`--vs` takes a baseline name or another genome file, so two saved champions can be
+`--vs` takes a baseline name, a saved opponent's name, or another genome file, so two champions can be
 played off against each other. `--trace` prints one game round by round — every
 unit's order, every shot and melee, and what it cost — which is the quickest way
 to see *why* an evolved AI does what it does. `--describe` prints its trees.
@@ -194,17 +241,18 @@ ones that matter most:
 
 | Flag | Default | What it does |
 | --- | --- | --- |
-| `--pop` | 24 | population size; the round robin is O(pop²) |
+| `--pop` | 24 | population size; cost is linear in it |
 | `--gens` | 20 | generations after the starting one |
-| `--games` | 2 | scenarios per pairing, each played from both sides |
-| `--seed` | 1 | the whole run is reproducible from this alone |
+| `--games` | 12 | boards per generation, shared by every opponent, each played from both sides |
+| `--seed` | 1 | with the saved opponents, the whole run is reproducible from this |
 | `--depth` | 6 | maximum tree depth |
 | `--mutation` | 0.15 | per-node chance of mutation when a child is made |
 | `--elites` | 2 | best genomes carried over untouched |
-| `--bench` | 12 | benchmark scenarios per generation; 0 skips it |
+| `--playoff` | 50 | boards in the final playoff between generation leaders |
 | `--every` | 10 | checkpoint interval; 0 writes only the last |
 | `--resume` | — | carry on from a checkpoint |
-| `--out-dir` | `artifacts` | where runs are written |
+| `--save-as` | — | save the champion under this name without asking |
+| `--out-dir` | `artifacts` | where runs and saved opponents live |
 | `--run-id` | from the settings | names this run's directory |
 
 ## Known limits
@@ -214,9 +262,9 @@ ones that matter most:
   the enemy, then close" from the `foeWheels` feature. It gets there, but slowly;
   a vocabulary of tactical intents at the leaves would converge far faster at the
   cost of a lower ceiling.
-- **Relative fitness can drift.** Co-evolution rewards beating this generation,
-  which is not the same as playing well. The benchmark columns are the check on
-  that; a rising `best` with a flat benchmark means the population is chasing
-  itself.
+- **Fixed opponents can be exploited.** Fitness is only as broad as the set of
+  opponents: a champion can learn to beat these particular commanders rather than
+  to play well. Saving champions as opponents widens the set run by run, which is
+  the check on that.
 - **One board, one rule set.** The board is the fixed 14×14 with no terrain, and
   shooting has no line-of-sight rule yet, so an evolved AI is fitted to those.

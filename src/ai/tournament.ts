@@ -1,13 +1,15 @@
 /**
- * A round of the genetic algorithm's evaluation: every genome plays every other
- * genome, and itself, several games per pairing.
+ * A round of the genetic algorithm's evaluation: every genome plays every fixed
+ * opponent over the same set of scenarios.
  *
- * Each pairing's games are played twice — once with each genome on the player
- * side — over the same scenario and the same dice seed, so neither is rewarded
- * for the side it drew. Self-play games are played and recorded too; they average
- * to exactly half a point for every genome, so they dilute the spread uniformly
- * without disturbing the ranking, and their differential is a useful read on how
- * much advantage the player side carries.
+ * Each scenario is played twice — once with the genome on the player side, once
+ * on the enemy side — over the same board, so neither side is rewarded for the
+ * side it drew. Every opponent is played on the same boards, so a genome's
+ * results against two opponents differ only by who it was playing.
+ *
+ * The opponents never change during a run, so a score is an absolute measure:
+ * a genome ranked first has beaten the fixed set better than the rest of its
+ * generation, not merely beaten the rest of its generation.
  */
 import type { Side } from '../prototypes/tactical/model'
 import { DEFAULT_ROUND_CAP, playGame, scoreFor } from './game'
@@ -18,9 +20,24 @@ import { makeRng, seedFrom } from './rng'
 import { randomScenario } from './scenario'
 import type { Commander } from './commander'
 
+export interface Benchmark {
+  opponent: string
+  games: number
+  wins: number
+  draws: number
+  losses: number
+  /** Wins plus half the draws, over games — the usual win rate. */
+  winRate: number
+  /** Mean score per game, as `scoreFor` counts it. */
+  score: number
+  differential: number
+  /** Mean rounds its games lasted. */
+  rounds: number
+}
+
 export interface Standing {
   genome: Genome
-  /** Mean score per game, including self-play. */
+  /** Mean score per game, over every opponent. */
   score: number
   games: number
   wins: number
@@ -30,15 +47,13 @@ export interface Standing {
   differential: number
   /** Mean rounds its games lasted. */
   rounds: number
-  /** Games it played against a copy of itself. */
-  selfGames: number
-  /** Mean player-side advantage in those games — a read on scenario symmetry. */
-  selfSideBias: number
+  /** The same games, one row per opponent, in the order they were given. */
+  against: Benchmark[]
 }
 
-export interface TournamentOptions {
-  /** Scenarios per pairing. Each is played twice, once from each side. */
-  gamesPerPairing?: number
+export interface GauntletOptions {
+  /** Scenarios, shared by every opponent. Each is played from both sides. */
+  games?: number
   seed?: number
   roundCap?: number
 }
@@ -51,22 +66,10 @@ interface Tally {
   losses: number
   differential: number
   rounds: number
-  selfGames: number
-  selfBias: number
 }
 
 function emptyTally(): Tally {
-  return {
-    score: 0,
-    games: 0,
-    wins: 0,
-    draws: 0,
-    losses: 0,
-    differential: 0,
-    rounds: 0,
-    selfGames: 0,
-    selfBias: 0,
-  }
+  return { score: 0, games: 0, wins: 0, draws: 0, losses: 0, differential: 0, rounds: 0 }
 }
 
 function credit(tally: Tally, outcome: GameOutcome, side: Side): void {
@@ -81,95 +84,15 @@ function credit(tally: Tally, outcome: GameOutcome, side: Side): void {
 }
 
 /**
- * Play the whole round robin and rank the population: highest mean score first,
- * ties broken by mean differential and then by id, so a ranking is stable.
- */
-export function runTournament(
-  population: Genome[],
-  options: TournamentOptions = {},
-): Standing[] {
-  const games = options.gamesPerPairing ?? 3
-  const seed = options.seed ?? 1
-  const roundCap = options.roundCap ?? DEFAULT_ROUND_CAP
-
-  const commanders = population.map(commanderOf)
-  const tallies = population.map(() => emptyTally())
-
-  for (let i = 0; i < population.length; i += 1) {
-    for (let j = i; j < population.length; j += 1) {
-      for (let game = 0; game < games; game += 1) {
-        const scenarioSeed = seedFrom(seed, i, j, game)
-        const scenario = randomScenario(makeRng(scenarioSeed), { seed: scenarioSeed })
-
-        // the same scenario from both sides, each with its own dice stream
-        const orientations: [number, number][] = [
-          [i, j],
-          [j, i],
-        ]
-        for (const [playerIndex, enemyIndex] of orientations) {
-          const dice = makeRng(seedFrom(scenarioSeed, playerIndex, enemyIndex))
-          const outcome = playGame(
-            commanders[playerIndex],
-            commanders[enemyIndex],
-            scenario,
-            dice,
-            { roundCap },
-          )
-          credit(tallies[playerIndex], outcome, 'player')
-          credit(tallies[enemyIndex], outcome, 'enemy')
-          if (i === j) {
-            tallies[i].selfGames += 1
-            tallies[i].selfBias += outcome.differential
-          }
-        }
-      }
-    }
-  }
-
-  const standings: Standing[] = population.map((genome, index) => {
-    const tally = tallies[index]
-    const per = (value: number) => (tally.games > 0 ? value / tally.games : 0)
-    return {
-      genome,
-      score: per(tally.score),
-      games: tally.games,
-      wins: tally.wins,
-      draws: tally.draws,
-      losses: tally.losses,
-      differential: per(tally.differential),
-      rounds: per(tally.rounds),
-      selfGames: tally.selfGames,
-      selfSideBias: tally.selfGames > 0 ? tally.selfBias / tally.selfGames : 0,
-    }
-  })
-
-  return standings.sort(
-    (a, b) =>
-      b.score - a.score ||
-      b.differential - a.differential ||
-      a.genome.id.localeCompare(b.genome.id),
-  )
-}
-
-export interface Benchmark {
-  opponent: string
-  games: number
-  wins: number
-  draws: number
-  losses: number
-  /** Wins plus half the draws, over games — the usual win rate. */
-  winRate: number
-  differential: number
-}
-
-/**
- * An absolute yardstick: a genome against a fixed commander, each scenario
- * played from both sides so the measurement carries no side bias.
+ * A genome against one fixed commander, each scenario played from both sides so
+ * the measurement carries no side bias. Scenarios depend on the seed and the
+ * game index alone, never on the opponent, which is what lets every opponent
+ * share the same boards.
  */
 export function benchmark(
   genome: Genome,
   opponent: Commander,
-  options: { games?: number; seed?: number; roundCap?: number } = {},
+  options: GauntletOptions = {},
 ): Benchmark {
   const games = options.games ?? 20
   const seed = options.seed ?? 7
@@ -189,13 +112,62 @@ export function benchmark(
     }
   }
 
+  const per = (value: number) => (tally.games > 0 ? value / tally.games : 0)
   return {
     opponent: opponent.id,
     games: tally.games,
     wins: tally.wins,
     draws: tally.draws,
     losses: tally.losses,
-    winRate: tally.games > 0 ? (tally.wins + tally.draws / 2) / tally.games : 0,
-    differential: tally.games > 0 ? tally.differential / tally.games : 0,
+    winRate: per(tally.wins + tally.draws / 2),
+    score: per(tally.score),
+    differential: per(tally.differential),
+    rounds: per(tally.rounds),
   }
+}
+
+/** One genome's results against every opponent, folded into a standing. */
+function standingOf(genome: Genome, against: Benchmark[]): Standing {
+  const games = against.reduce((total, mark) => total + mark.games, 0)
+  // every opponent gets the same number of games, so a mean over games is also
+  // a mean over opponents: each one weighs the same
+  const sum = (field: 'score' | 'differential' | 'rounds') =>
+    games > 0
+      ? against.reduce((total, mark) => total + mark[field] * mark.games, 0) / games
+      : 0
+  return {
+    genome,
+    score: sum('score'),
+    games,
+    wins: against.reduce((total, mark) => total + mark.wins, 0),
+    draws: against.reduce((total, mark) => total + mark.draws, 0),
+    losses: against.reduce((total, mark) => total + mark.losses, 0),
+    differential: sum('differential'),
+    rounds: sum('rounds'),
+    against,
+  }
+}
+
+/**
+ * Play every genome against every opponent and rank them: highest mean score
+ * first, ties broken by mean differential and then by id, so a ranking is stable.
+ */
+export function runGauntlet(
+  population: Genome[],
+  opponents: readonly Commander[],
+  options: GauntletOptions = {},
+): Standing[] {
+  if (opponents.length === 0) throw new Error('a gauntlet needs at least one opponent')
+  const standings = population.map((genome) =>
+    standingOf(
+      genome,
+      opponents.map((opponent) => benchmark(genome, opponent, options)),
+    ),
+  )
+  return standings.sort(
+    (a, b) =>
+      b.score - a.score ||
+      b.differential - a.differential ||
+      a.genome.id.localeCompare(b.genome.id),
+  )
 }

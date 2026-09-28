@@ -20,6 +20,7 @@ import { rosterOf } from './roster'
 import { randomScenario } from './scenario'
 import { benchmark } from './tournament'
 import { describeGenome } from './describe'
+import { readSavedOpponent } from './saved-opponents'
 
 interface Flags {
   genome: string | null
@@ -35,8 +36,8 @@ interface Flags {
 const USAGE = `Usage: npm run ai:play -- --genome PATH [flags]
 
   --genome PATH  a champion.json, or a checkpoint (its leader is used)
-  --vs WHO       ${BASELINES.map((opponent) => opponent.id).join(' | ')} | a path to another genome
-                 (default ${BASELINES[0].id})
+  --vs WHO       ${BASELINES.map((opponent) => opponent.id).join(' | ')} | a saved opponent's
+                 name | a path to another genome (default ${BASELINES[0].id})
   --games N      scenarios to measure, each played from both sides (default 20)
   --seed N       seed for the scenarios and the dice (default 7)
   --cap N        rounds before a game is a draw (default ${DEFAULT_ROUND_CAP})
@@ -118,10 +119,12 @@ export function readGenome(path: string): Genome {
   return parseGenome(value)
 }
 
-/** A `--vs` argument: one of the baselines, or a genome on disk. */
+/** A `--vs` argument: one of the baselines, a saved opponent, or a genome on disk. */
 function readOpponent(who: string): Commander {
   const baseline = baselineById(who)
   if (baseline) return baseline
+  const saved = readSavedOpponent('artifacts', who)
+  if (saved) return saved.commander
   return commanderOf(readGenome(who))
 }
 

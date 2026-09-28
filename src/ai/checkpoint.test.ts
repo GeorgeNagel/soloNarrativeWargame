@@ -16,15 +16,16 @@ import {
 import { evolve, resolveOptions, startRun, stepRun } from './evolve'
 import type { ResolvedOptions } from './evolve'
 import { makeGenomeSpecs, randomGenome } from './genome'
+import { genomeOpponent } from './opponents'
 import { makeRng } from './rng'
 
 const OPTIONS: ResolvedOptions = resolveOptions({
   populationSize: 6,
   generations: 4,
-  gamesPerPairing: 1,
+  games: 1,
   maxDepth: 4,
   roundCap: 8,
-  benchmarkGames: 0,
+  playoffGames: 1,
   seed: 21,
 })
 
@@ -38,14 +39,29 @@ function roundTrip(value: unknown) {
 describe('serializeOptions', () => {
   it('names the baselines rather than holding them', () => {
     const saved = serializeOptions(OPTIONS)
-    expect(saved.baselines).toEqual(BASELINES.map((opponent) => opponent.id))
+    expect(saved.opponents).toEqual(
+      BASELINES.map((opponent) => ({ id: opponent.id, genome: null })),
+    )
     expect(saved.seed).toBe(21)
   })
 
   it('comes back as the same options', () => {
     const back = deserializeOptions(serializeOptions(OPTIONS))
     expect(serializeOptions(back)).toEqual(serializeOptions(OPTIONS))
-    expect(back.baselines).toEqual(OPTIONS.baselines)
+    expect(back.opponents.map((opponent) => opponent.commander)).toEqual(
+      OPTIONS.opponents.map((opponent) => opponent.commander),
+    )
+  })
+
+  it('holds a saved opponent in full, so it plays the same after a resume', () => {
+    const genome = randomGenome('g', makeRng(3), 0, SPECS)
+    const options = { ...OPTIONS, opponents: [...OPTIONS.opponents, genomeOpponent('rival', genome)] }
+    const saved = JSON.parse(JSON.stringify(serializeOptions(options)))
+    const back = deserializeOptions(saved)
+    const rival = back.opponents[back.opponents.length - 1]
+    expect(rival.id).toBe('rival')
+    expect(rival.commander.id).toBe('rival')
+    expect(rival.genome).toEqual(genome)
   })
 
   it('lets the caller override what it is resumed with', () => {
@@ -55,7 +71,10 @@ describe('serializeOptions', () => {
   })
 
   it('refuses a baseline this build does not have', () => {
-    const saved = { ...serializeOptions(OPTIONS), baselines: ['no-such-plan'] }
+    const saved = {
+      ...serializeOptions(OPTIONS),
+      opponents: [{ id: 'no-such-plan', genome: null }],
+    }
     expect(() => deserializeOptions(saved)).toThrow(/unknown baseline/)
   })
 })
@@ -72,6 +91,9 @@ describe('a checkpoint', () => {
     expect(checkpoint.population.length).toBe(OPTIONS.populationSize)
     expect(checkpoint.standings.length).toBe(OPTIONS.populationSize)
     expect(checkpoint.reports.length).toBe(1)
+    expect(checkpoint.winners.map((genome) => genome.id)).toEqual([
+      state.standings[0].genome.id,
+    ])
   })
 
   it('stores the population in ranked order', () => {
@@ -186,6 +208,10 @@ describe('parseCheckpoint', () => {
     expect(() => parseCheckpoint({ ...checkpoint, version: 99 })).toThrow(/version 99/)
   })
 
+  it('says why a round-robin checkpoint cannot be resumed', () => {
+    expect(() => parseCheckpoint({ ...checkpoint, version: 1 })).toThrow(/round-robin/)
+  })
+
   it('refuses a ranking that does not line up with the population', () => {
     expect(() =>
       parseCheckpoint({ ...checkpoint, standings: checkpoint.standings.slice(1) }),
@@ -219,8 +245,8 @@ describe('paths and the curve', () => {
     ])
   })
 
-  it('writes the curve as one row a generation, with a column per baseline', () => {
-    const result = evolve({ ...OPTIONS, generations: 1, benchmarkGames: 1 })
+  it('writes the curve as one row a generation, with a column per opponent', () => {
+    const result = evolve({ ...OPTIONS, generations: 1 })
     const rows = curveCsv(result.reports).trimEnd().split('\n')
     expect(rows.length).toBe(3)
     expect(rows[0]).toContain('generation,best,mean,worst')

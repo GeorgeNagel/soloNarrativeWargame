@@ -1,14 +1,17 @@
 /**
  * `npm run evolve` — run the genetic algorithm and write the run down.
  *
- * Every knob has a flag and every run is reproducible from `--seed`, so a result
- * can be re-derived from the line that produced it. Checkpoints are written as
- * the run goes, and `--resume` picks one up and carries on the same stream.
+ * Every knob has a flag and every run is reproducible from `--seed` and the
+ * opponents it played, so a result can be re-derived from the line that produced
+ * it. Checkpoints are written as the run goes, and `--resume` picks one up and
+ * carries on the same stream. At the end the champion can be saved as a named
+ * opponent, which every later run then plays.
  */
+import { randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import process from 'node:process'
-import { BASELINES } from './baseline'
+import { createInterface } from 'node:readline/promises'
 import {
   checkpointName,
   curveCsv,
@@ -23,7 +26,9 @@ import { describeGenome } from './describe'
 import { DEFAULTS, evolve } from './evolve'
 import type { GenerationReport, ResolvedOptions, RunState } from './evolve'
 import { genomeSize } from './genome'
-import { benchmark } from './tournament'
+import type { Genome } from './genome'
+import { allOpponents, nameProblem, saveOpponent } from './saved-opponents'
+import type { Standing } from './tournament'
 
 interface Flags {
   pop: number
@@ -34,11 +39,12 @@ interface Flags {
   mutation: number
   elites: number
   cap: number
-  bench: number
+  playoff: number
   outDir: string
   runId: string | null
   checkpointEvery: number
   resume: string | null
+  saveAs: string | null
   quiet: boolean
 }
 
@@ -46,17 +52,19 @@ const USAGE = `Usage: npm run evolve -- [flags]
 
   --pop N          population size (default ${DEFAULTS.populationSize})
   --gens N         generations to run (default ${DEFAULTS.generations})
-  --games N        scenarios per pairing, each played from both sides (default ${DEFAULTS.gamesPerPairing})
+  --games N        boards per generation, shared by every opponent and played
+                   from both sides (default ${DEFAULTS.games})
   --seed N         seed for the whole run (default ${DEFAULTS.seed})
   --depth N        maximum tree depth (default ${DEFAULTS.maxDepth})
   --mutation P     per-node mutation chance (default ${DEFAULTS.mutationRate})
   --elites N       top genomes carried over untouched (default ${DEFAULTS.elites})
   --cap N          rounds before a game is a draw (default ${DEFAULTS.roundCap})
-  --bench N        benchmark scenarios per generation, 0 to skip (default ${DEFAULTS.benchmarkGames})
-  --out-dir DIR    where runs are written (default artifacts)
+  --playoff N      boards in the final playoff between generation leaders (default ${DEFAULTS.playoffGames})
+  --out-dir DIR    where runs and saved opponents live (default artifacts)
   --run-id NAME    names this run's directory (default from the settings)
   --every N        write a checkpoint every N generations, 0 for the last only (default 10)
   --resume PATH    carry on from a checkpoint, up to --gens
+  --save-as NAME   save the champion as a named opponent without asking
   --quiet          only print the final report
 `
 
@@ -64,17 +72,18 @@ function parseFlags(argv: string[]): Flags {
   const flags: Flags = {
     pop: DEFAULTS.populationSize,
     gens: DEFAULTS.generations,
-    games: DEFAULTS.gamesPerPairing,
+    games: DEFAULTS.games,
     seed: DEFAULTS.seed,
     depth: DEFAULTS.maxDepth,
     mutation: DEFAULTS.mutationRate,
     elites: DEFAULTS.elites,
     cap: DEFAULTS.roundCap,
-    bench: DEFAULTS.benchmarkGames,
+    playoff: DEFAULTS.playoffGames,
     outDir: 'artifacts',
     runId: null,
     checkpointEvery: 10,
     resume: null,
+    saveAs: null,
     quiet: false,
   }
 
@@ -116,8 +125,8 @@ function parseFlags(argv: string[]): Flags {
       case '--cap':
         flags.cap = Number(value)
         break
-      case '--bench':
-        flags.bench = Number(value)
+      case '--playoff':
+        flags.playoff = Number(value)
         break
       case '--out-dir':
         flags.outDir = value
@@ -130,6 +139,9 @@ function parseFlags(argv: string[]): Flags {
         break
       case '--resume':
         flags.resume = value
+        break
+      case '--save-as':
+        flags.saveAs = value
         break
       default:
         throw new Error(`unknown flag ${flag}\n\n${USAGE}`)
@@ -144,7 +156,7 @@ function defaultRunId(options: ResolvedOptions): string {
   return [
     `pop${options.populationSize}`,
     `gen${options.generations}`,
-    `games${options.gamesPerPairing}`,
+    `games${options.games}`,
     `depth${options.maxDepth}`,
     `seed${options.seed}`,
   ].join('-')
@@ -160,11 +172,26 @@ function num(value: number, digits = 3): string {
   return value.toFixed(digits)
 }
 
-function line(report: GenerationReport): string {
-  const bench =
-    report.benchmarks.length > 0
-      ? report.benchmarks.map((mark) => num(mark.winRate)).join('  ')
-      : '  —'
+/** One column per opponent, as wide as its name. */
+function opponentWidths(options: ResolvedOptions): number[] {
+  return options.opponents.map((opponent) => Math.max(5, opponent.id.length))
+}
+
+function header(options: ResolvedOptions): string {
+  const widths = opponentWidths(options)
+  return [
+    pad('gen', 4),
+    pad('best', 7),
+    pad('mean', 7),
+    pad('worst', 7),
+    pad('rounds', 7),
+    pad('nodes', 7),
+    ...options.opponents.map((opponent, index) => pad(opponent.id, widths[index])),
+  ].join(' ')
+}
+
+function line(report: GenerationReport, options: ResolvedOptions): string {
+  const widths = opponentWidths(options)
   return [
     pad(`${report.generation}`, 4),
     pad(num(report.best), 7),
@@ -172,21 +199,32 @@ function line(report: GenerationReport): string {
     pad(num(report.worst), 7),
     pad(num(report.rounds, 1), 7),
     pad(num(report.nodes, 1), 7),
-    pad(num(report.sideBias), 8),
-    bench,
+    ...report.against.map((mark, index) => pad(num(mark.winRate), widths[index])),
   ].join(' ')
 }
 
-const HEADER = [
-  pad('gen', 4),
-  pad('best', 7),
-  pad('mean', 7),
-  pad('worst', 7),
-  pad('rounds', 7),
-  pad('nodes', 7),
-  pad('bias', 8),
-  BASELINES.map((opponent) => opponent.id).join('  '),
-].join(' ')
+/** The champion's line against each opponent, as the report and champion.txt print it. */
+function summary(standing: Standing): string[] {
+  const width = Math.max(...standing.against.map((mark) => mark.opponent.length))
+  return standing.against.map(
+    (mark) =>
+      `vs ${pad(mark.opponent, width)}  ${mark.wins}W ${mark.draws}D ${mark.losses}L ` +
+      `- win rate ${num(mark.winRate)}, differential ${num(mark.differential)}`,
+  )
+}
+
+const PLAYOFF_SHOWN = 5
+
+function playoffTable(playoff: Standing[]): string[] {
+  const rows = playoff.slice(0, PLAYOFF_SHOWN).map(
+    (standing, index) =>
+      `  ${pad(`${index + 1}`, 3)} ${pad(standing.genome.id, 10)} ` +
+      `${pad(`gen ${standing.genome.generation}`, 8)} score ${num(standing.score)}  ` +
+      `${standing.wins}W ${standing.draws}D ${standing.losses}L`,
+  )
+  const rest = playoff.length - PLAYOFF_SHOWN
+  return rest > 0 ? [...rows, `  ... and ${rest} more`] : rows
+}
 
 // ── writing the run down ──────────────────────────────────
 
@@ -207,36 +245,72 @@ function writeCheckpoint(
   return path
 }
 
-function main(): void {
+// ── saving the champion ───────────────────────────────────
+
+/**
+ * Ask whether to keep the champion as an opponent, and under what name. An empty
+ * name takes the generated one; a name that cannot be used is asked for again.
+ */
+async function askForName(outDir: string): Promise<string | null> {
+  const prompt = createInterface({ input: process.stdin, output: process.stdout })
+  try {
+    const keep = (await prompt.question('Save champion as a named opponent? [Y/n] '))
+      .trim()
+      .toLowerCase()
+    if (keep !== '' && keep !== 'y' && keep !== 'yes') return null
+    const fallback = randomUUID()
+    for (;;) {
+      const name = (await prompt.question(`Name [${fallback}]: `)).trim() || fallback
+      const problem = nameProblem(outDir, name)
+      if (!problem) return name
+      process.stdout.write(`  ${problem}\n`)
+    }
+  } finally {
+    prompt.close()
+  }
+}
+
+function saveChampion(
+  outDir: string,
+  name: string,
+  runId: string,
+  standing: Standing,
+): string {
+  const genome: Genome = standing.genome
+  return saveOpponent(outDir, {
+    name,
+    savedAt: new Date().toISOString(),
+    source: { runId, genomeId: genome.id, generation: genome.generation },
+    playoff: standing.against,
+    genome,
+  })
+}
+
+async function main(): Promise<void> {
   const flags = parseFlags(process.argv.slice(2))
   const say = (text: string) => process.stdout.write(`${text}\n`)
 
-  const overrides = {
-    populationSize: flags.pop,
-    generations: flags.gens,
-    gamesPerPairing: flags.games,
-    seed: flags.seed,
-    roundCap: flags.cap,
-    maxDepth: flags.depth,
-    mutationRate: flags.mutation,
-    elites: flags.elites,
-    benchmarkGames: flags.bench,
+  // checked before the run, so a bad name does not cost a run's worth of waiting
+  if (flags.saveAs !== null) {
+    const problem = nameProblem(flags.outDir, flags.saveAs)
+    if (problem) throw new Error(`--save-as ${flags.saveAs}: ${problem}`)
   }
 
   let from: RunState | undefined
-  let options: ResolvedOptions | undefined
+  let resumed: ResolvedOptions | undefined
   let resumedId: string | undefined
   if (flags.resume) {
     const checkpoint = parseCheckpoint(JSON.parse(readFileSync(flags.resume, 'utf8')))
-    // the settings come from the checkpoint; only the generation count is the
-    // caller's to change, since everything else would invalidate the run so far
-    const resumed = fromCheckpoint(checkpoint, { generations: flags.gens })
-    from = resumed.state
-    options = resumed.options
+    // the settings and the opponents come from the checkpoint; only the
+    // generation count is the caller's to change, since everything else would
+    // invalidate the run so far
+    const back = fromCheckpoint(checkpoint, { generations: flags.gens })
+    from = back.state
+    resumed = back.options
     // a resumed run is the same run carried further, so its checkpoints belong
     // next to the ones already written rather than in a directory of their own
     resumedId = checkpoint.runId
-    if (from.generation >= options.generations) {
+    if (from.generation >= resumed.generations) {
       throw new Error(
         `checkpoint is already at generation ${from.generation}; ` +
           `pass --gens above that to carry on`,
@@ -244,11 +318,23 @@ function main(): void {
     }
     say(
       `resuming ${checkpoint.runId} from generation ${from.generation} ` +
-        `(${flags.resume}) up to generation ${options.generations}`,
+        `(${flags.resume}) up to generation ${resumed.generations}`,
     )
   }
 
-  const settled = options ?? { ...DEFAULTS, ...overrides }
+  const settled: ResolvedOptions = resumed ?? {
+    ...DEFAULTS,
+    populationSize: flags.pop,
+    generations: flags.gens,
+    games: flags.games,
+    seed: flags.seed,
+    roundCap: flags.cap,
+    maxDepth: flags.depth,
+    mutationRate: flags.mutation,
+    elites: flags.elites,
+    playoffGames: flags.playoff,
+    opponents: allOpponents(flags.outDir),
+  }
   const runId = flags.runId ?? resumedId ?? defaultRunId(settled)
   const paths = runPaths(flags.outDir, runId)
 
@@ -256,18 +342,19 @@ function main(): void {
     if (!from) {
       say(
         `evolving ${settled.populationSize} genomes over ${settled.generations} generations ` +
-          `(seed ${settled.seed}, ${settled.gamesPerPairing} scenarios per pairing)`,
+          `(seed ${settled.seed}, ${settled.games} boards a generation) against ` +
+          settled.opponents.map((opponent) => opponent.id).join(', '),
       )
     }
-    say(HEADER)
+    say(header(settled))
   }
 
   const started = Date.now()
   const result = evolve(
-    options ?? overrides,
+    settled,
     {
       onGeneration: (report, state) => {
-        if (!flags.quiet) say(line(report))
+        if (!flags.quiet) say(line(report, settled))
         const last = state.generation === settled.generations
         const due =
           flags.checkpointEvery > 0 && state.generation % flags.checkpointEvery === 0
@@ -278,44 +365,46 @@ function main(): void {
   )
   const seconds = (Date.now() - started) / 1000
 
-  const champion = result.champion
-  const marks = BASELINES.map((opponent) =>
-    benchmark(champion, opponent, {
-      games: Math.max(20, flags.bench),
-      seed: settled.seed + 1000,
-      roundCap: settled.roundCap,
-    }),
-  )
-
-  const summary = marks.map(
-    (mark) =>
-      `  vs ${pad(mark.opponent, 18)} ${mark.wins}W ${mark.draws}D ${mark.losses}L ` +
-      `— win rate ${num(mark.winRate)}, differential ${num(mark.differential)}`,
-  )
+  const winner = result.playoff[0]
+  const champion = winner.genome
   say('')
-  say(`champion ${champion.id} — ${genomeSize(champion)} nodes, ${num(seconds, 1)}s`)
-  for (const row of summary) say(row)
+  say(
+    `playoff: ${result.playoff.length} generation leaders over ` +
+      `${settled.playoffGames} new boards`,
+  )
+  for (const row of playoffTable(result.playoff)) say(row)
+  say('')
+  say(
+    `champion ${champion.id} (generation ${champion.generation}) - ` +
+      `${genomeSize(champion)} nodes, ${num(seconds, 1)}s`,
+  )
+  for (const row of summary(winner)) say(`  ${row}`)
   say('')
   say(describeGenome(champion))
 
+  const standingRow = (standing: Standing) => ({
+    id: standing.genome.id,
+    generation: standing.genome.generation,
+    score: standing.score,
+    wins: standing.wins,
+    draws: standing.draws,
+    losses: standing.losses,
+    differential: standing.differential,
+    against: standing.against,
+  })
+  const { opponents: _opponents, ...options } = serializeOptions(result.options)
   write(
     paths.run,
     `${JSON.stringify(
       {
         runId,
-        options: serializeOptions(result.options),
+        // the opponents by name only; the checkpoints hold them in full
+        options: { ...options, opponents: result.options.opponents.map((o) => o.id) },
         seconds,
         champion: champion.id,
-        finalBenchmarks: marks,
+        playoff: result.playoff.map(standingRow),
         reports: result.reports,
-        standings: result.standings.map((standing) => ({
-          id: standing.genome.id,
-          score: standing.score,
-          wins: standing.wins,
-          draws: standing.draws,
-          losses: standing.losses,
-          differential: standing.differential,
-        })),
+        standings: result.standings.map(standingRow),
       },
       null,
       2,
@@ -326,15 +415,26 @@ function main(): void {
   write(
     paths.championText,
     [
-      `champion of ${runId}`,
+      `champion of ${runId}, from the playoff over ${settled.playoffGames} boards`,
       '',
-      ...summary.map((row) => row.trim()),
+      ...summary(winner),
       '',
       describeGenome(champion),
       '',
     ].join('\n'),
   )
   say(`\nwrote ${paths.root}/`)
+
+  // without a terminal nothing is saved unless it was asked for, so scripted
+  // runs do not fill the opponents directory with generated names
+  const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY)
+  const name = flags.saveAs ?? (interactive ? await askForName(flags.outDir) : null)
+  if (name !== null) {
+    say(`saved ${saveChampion(flags.outDir, name, runId, winner)}`)
+  }
 }
 
-main()
+main().catch((error: unknown) => {
+  process.stderr.write(`${(error as Error).message}\n`)
+  process.exit(1)
+})

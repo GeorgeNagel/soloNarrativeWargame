@@ -1,34 +1,42 @@
 /**
  * The genetic algorithm itself.
  *
- * A generation is one round robin (see `tournament.ts`), a ranking, and then the
- * top half reproducing to refill the population. Crossover swaps subtrees between
- * two parents, tree by tree, and mutation nudges thresholds, repoints branches at
+ * A generation is one gauntlet (see `tournament.ts`) — every genome against every
+ * fixed opponent over a fresh set of boards — a ranking, and then the top half
+ * reproducing to refill the population. Crossover swaps subtrees between two
+ * parents, tree by tree, and mutation nudges thresholds, repoints branches at
  * other features and regrows the occasional subtree.
  *
- * Fitness here is relative: a genome is only ever scored against its own
- * generation, so the mean score barely moves even while the population improves.
- * The per-generation benchmark against a fixed commander is the absolute curve.
+ * Fitness is absolute: the opponents never change during a run, so a rising
+ * score means the population is getting better against them. The boards do
+ * change, generation to generation, so a leader has to keep beating new ones to
+ * stay on top. Each generation's leader is kept aside, and at the end they all
+ * play a playoff on one large set of boards none of them has seen; its winner is
+ * the run's champion.
  */
 import { UNIT_TYPES } from '../prototypes/tactical/model'
 import type { RoundOrder, UnitType } from '../prototypes/tactical/model'
-import { BASELINES } from './baseline'
-import type { Commander } from './commander'
 import { DEFAULT_ROUND_CAP } from './game'
 import { genomeSize, makeGenomeSpecs, randomGenome } from './genome'
 import type { Genome, GenomeSpecs } from './genome'
+import { BASELINE_OPPONENTS } from './opponents'
+import type { Opponent } from './opponents'
 import { makeRng, seedFrom } from './rng'
 import type { Rng } from './rng'
 import { crossover, mutate } from './tree'
 import type { Tree } from './tree'
-import { benchmark, runTournament } from './tournament'
+import { runGauntlet } from './tournament'
 import type { Benchmark, Standing } from './tournament'
 
 export interface EvolveOptions {
   populationSize?: number
   generations?: number
-  /** Scenarios per pairing; each is played from both sides. */
-  gamesPerPairing?: number
+  /**
+   * Boards per generation, shared by every opponent. Each is played from both
+   * sides. More boards make a generation's ranking less a matter of which boards
+   * were drawn.
+   */
+  games?: number
   seed?: number
   roundCap?: number
   maxDepth?: number
@@ -38,28 +46,28 @@ export interface EvolveOptions {
   survivorFraction?: number
   /** Best genomes carried into the next generation untouched. */
   elites?: number
-  /** Scenarios per generation against each yardstick. Zero skips the benchmark. */
-  benchmarkGames?: number
-  /** The fixed commanders the benchmark plays. */
-  baselines?: readonly Commander[]
+  /** Boards in the final playoff between the generations' leaders. */
+  playoffGames?: number
+  /** The fixed commanders every genome is scored against. */
+  opponents?: readonly Opponent[]
 }
 
-export interface ResolvedOptions extends Required<Omit<EvolveOptions, 'baselines'>> {
-  baselines: readonly Commander[]
+export interface ResolvedOptions extends Required<Omit<EvolveOptions, 'opponents'>> {
+  opponents: readonly Opponent[]
 }
 
 export const DEFAULTS: ResolvedOptions = {
   populationSize: 24,
   generations: 20,
-  gamesPerPairing: 2,
+  games: 12,
   seed: 1,
   roundCap: DEFAULT_ROUND_CAP,
   maxDepth: 6,
   mutationRate: 0.15,
   survivorFraction: 0.5,
   elites: 2,
-  benchmarkGames: 12,
-  baselines: BASELINES,
+  playoffGames: 50,
+  opponents: BASELINE_OPPONENTS,
 }
 
 export function resolveOptions(options: EvolveOptions = {}): ResolvedOptions {
@@ -68,19 +76,17 @@ export function resolveOptions(options: EvolveOptions = {}): ResolvedOptions {
 
 export interface GenerationReport {
   generation: number
-  /** Best, mean and worst mean-score in the round robin. */
+  /** Best, mean and worst mean-score against the opponents. */
   best: number
   mean: number
   worst: number
   bestId: string
-  /** Mean rounds a game lasted, across the whole round robin. */
+  /** Mean rounds a game lasted, across the whole generation. */
   rounds: number
   /** Mean total nodes across a genome's five trees. */
   nodes: number
-  /** Mean player-side advantage in the self-play games. */
-  sideBias: number
-  /** The leader against each fixed yardstick. Empty when the benchmark is off. */
-  benchmarks: Benchmark[]
+  /** The leader's results against each opponent, in the options' order. */
+  against: Benchmark[]
 }
 
 export interface EvolveResult {
@@ -88,7 +94,9 @@ export interface EvolveResult {
   reports: GenerationReport[]
   /** The final generation's ranking. */
   standings: Standing[]
-  /** The final generation's leader. */
+  /** Every generation's leader, ranked on the playoff's boards. */
+  playoff: Standing[]
+  /** The playoff's winner. */
   champion: Genome
 }
 
@@ -197,6 +205,11 @@ export interface RunState {
   standings: Standing[]
   /** One report per generation so far, oldest first. */
   reports: GenerationReport[]
+  /**
+   * Every generation's leader so far, oldest first, each genome once — an elite
+   * that led several generations running is entered the first time only.
+   */
+  winners: Genome[]
   /** The generator that breeds the next generation. */
   rng: Rng
 }
@@ -206,11 +219,7 @@ function mean(values: number[]): number {
   return values.reduce((total, value) => total + value, 0) / values.length
 }
 
-function report(
-  generation: number,
-  standings: Standing[],
-  options: ResolvedOptions,
-): GenerationReport {
+function report(generation: number, standings: Standing[]): GenerationReport {
   const leader = standings[0]
   return {
     generation,
@@ -220,34 +229,36 @@ function report(
     bestId: leader.genome.id,
     rounds: mean(standings.map((standing) => standing.rounds)),
     nodes: mean(standings.map((standing) => genomeSize(standing.genome))),
-    sideBias: mean(standings.map((standing) => standing.selfSideBias)),
-    benchmarks:
-      options.benchmarkGames > 0
-        ? options.baselines.map((opponent) =>
-            benchmark(leader.genome, opponent, {
-              games: options.benchmarkGames,
-              // one fixed set of scenarios for every generation, so the curve is
-              // comparable; the benchmark never feeds back into selection, so
-              // there is nothing for the population to overfit to
-              seed: seedFrom(options.seed, 0xbe11),
-              roundCap: options.roundCap,
-            }),
-          )
-        : [],
+    against: leader.against,
   }
 }
 
-/** The tournament for one generation of a run, seeded from the run's seed. */
+function withLeader(winners: Genome[], standings: Standing[]): Genome[] {
+  const leader = standings[0].genome
+  return winners.some((genome) => genome.id === leader.id)
+    ? winners
+    : [...winners, leader]
+}
+
+/**
+ * The gauntlet for one generation of a run. The boards are seeded from the run's
+ * seed and the generation, so every generation plays a fresh set and every
+ * genome within one plays the same set.
+ */
 function rank(
   population: Genome[],
   generation: number,
   options: ResolvedOptions,
 ): Standing[] {
-  return runTournament(population, {
-    gamesPerPairing: options.gamesPerPairing,
-    seed: seedFrom(options.seed, generation),
-    roundCap: options.roundCap,
-  })
+  return runGauntlet(
+    population,
+    options.opponents.map((opponent) => opponent.commander),
+    {
+      games: options.games,
+      seed: seedFrom(options.seed, generation),
+      roundCap: options.roundCap,
+    },
+  )
 }
 
 /** Generation zero: a random population, ranked. */
@@ -257,7 +268,13 @@ export function startRun(
 ): RunState {
   const rng = makeRng(options.seed)
   const standings = rank(initialPopulation(options.populationSize, rng, specs), 0, options)
-  return { generation: 0, standings, reports: [report(0, standings, options)], rng }
+  return {
+    generation: 0,
+    standings,
+    reports: [report(0, standings)],
+    winners: withLeader([], standings),
+    rng,
+  }
 }
 
 /**
@@ -282,9 +299,28 @@ export function stepRun(
   return {
     generation,
     standings,
-    reports: [...state.reports, report(generation, standings, options)],
+    reports: [...state.reports, report(generation, standings)],
+    winners: withLeader(state.winners, standings),
     rng: state.rng,
   }
+}
+
+/**
+ * Every generation's leader on one set of boards none of them was ranked on.
+ * Scores from different generations were earned on different boards and cannot
+ * be compared; this is the comparison that can.
+ */
+export function runPlayoff(winners: Genome[], options: ResolvedOptions): Standing[] {
+  return runGauntlet(
+    winners,
+    options.opponents.map((opponent) => opponent.commander),
+    {
+      games: options.playoffGames,
+      // three parts rather than two, so it can never meet a generation's seed
+      seed: seedFrom(options.seed, 0x9a7f, 0),
+      roundCap: options.roundCap,
+    },
+  )
 }
 
 export interface EvolveHooks {
@@ -293,7 +329,8 @@ export interface EvolveHooks {
 }
 
 /**
- * Run the whole thing, from scratch or from a state a checkpoint was read into.
+ * Run the whole thing, from scratch or from a state a checkpoint was read into,
+ * then play the playoff.
  *
  * `hooks.onGeneration` fires as each generation is ranked, which is where a CLI
  * prints the curve and writes its checkpoints.
@@ -316,10 +353,12 @@ export function evolve(
     onGeneration?.(state.reports[state.reports.length - 1], state)
   }
 
+  const playoff = runPlayoff(state.winners, resolved)
   return {
     options: resolved,
     reports: state.reports,
     standings: state.standings,
-    champion: state.standings[0].genome,
+    playoff,
+    champion: playoff[0].genome,
   }
 }
