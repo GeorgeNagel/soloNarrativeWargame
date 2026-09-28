@@ -28,6 +28,12 @@ picks it from the army-level features, and every unit tree gets it as the
 on, so an army can coordinate a general advance or a refused flank without any of
 that being written in by hand. Nothing forces a lineage to use it.
 
+Both kinds of tree also see **`attacking`**: 1 when the genome's side is the
+scenario's attacker and must break the other side to win, 0 when it is the
+defender and only has to survive. A called-off game goes to the defender, so the
+same army may want to advance in one role and stand in the other, and this flag
+lets a genome learn both from one set of trees.
+
 Every feature a tree may branch on is listed in `src/ai/features.ts`, each with
 the range its thresholds are drawn from. Thresholds always land between two steps
 of a feature, so a test on a 0/1 flag is always `< 0.5` and no branch is dead.
@@ -40,12 +46,16 @@ stream, so any game replays from its seed. A game ends when one side is wiped, a
 a 30-round cap, or after three rounds in which nothing moved, shot or fought,
 which is how two armies that both stand fast are called off early.
 
-**Scoring** is a win, draw or loss, plus a quarter of the surviving-strength
+**There are no draws.** Each scenario names an attacker, and the attacker wins
+only by wiping the defender out. Any other ending — the round cap, a stalemate,
+or both sides wiped in the same round — goes to the defender.
+
+**Scoring** is a win or loss, plus a quarter of the surviving-strength
 differential, where strength is the fraction of its starting hit points a side
 still has on the board. The differential is what gives selection a gradient in
-the first generations, when nearly every game is a draw and pure win rate would
-rank at random. A game stopped by the cap is a draw, so the differential is the
-only thing separating two armies that never broke each other.
+the first generations, when nearly every game is called off and pure win rate
+would rank a population by who happened to defend. It separates two genomes that
+both held, or both failed to break through, by how much each kept.
 
 ## A scenario
 
@@ -55,6 +65,8 @@ mix of types, and the enemy deployment is the player's reflected through the
 board's centre — the shape the hand-written St. Aubin Ford scenario already has.
 That reflection preserves every distance on the board, so swapping sides is an
 exact rematch and a win says something about the AI rather than about the draw.
+The attacker is drawn per scenario too; since the gauntlet plays each scenario
+from both sides, every genome attacks and defends equally often.
 
 On the 14×14 board, with an even number of rows, the reflection maps every hex
 onto another hex of the board. An odd-sized board is not closed under it — the
@@ -142,31 +154,34 @@ champion's line and the table do not have to agree.
 ```
 $ npm run evolve
 gen  best    mean    worst   rounds  nodes   close-on-nearest hold-fast
-0    0.571   0.393   0.268   22.2    40.8    0.625            0.500
-5    0.702   0.580   0.388   19.9    36.9    0.854            0.500
-10   0.685   0.579   0.382   21.9    32.0    0.833            0.500
-15   0.716   0.613   0.446   21.6    31.5    0.896            0.500
-20   0.663   0.554   0.481   21.5    30.8    0.792            0.500
+0    0.571   0.387   0.251   22.0    40.8    0.625            0.500
+5    0.645   0.551   0.390   20.9    32.3    0.750            0.500
+10   0.642   0.581   0.477   21.8    13.4    0.750            0.500
+15   0.684   0.602   0.456   21.9    22.8    0.833            0.500
+20   0.620   0.572   0.476   22.2    11.8    0.708            0.500
 
-playoff: 17 generation leaders over 50 new boards
-  1   g3-12      gen 3    score 0.640  61W 127D 12L
-  2   g9-17      gen 9    score 0.636  62W 124D 14L
-  3   g8-21      gen 8    score 0.630  60W 126D 14L
+playoff: 21 generation leaders over 50 new boards
+  1   g17-14     gen 17   score 0.629  123W 77L
+  2   g20-11     gen 20   score 0.623  121W 79L
+  3   g19-18     gen 19   score 0.616  120W 80L
   ...
 
-champion g3-12 (generation 3) - 19 nodes, 72.5s
-  vs close-on-nearest  61W 27D 12L - win rate 0.745, differential 0.137
-  vs hold-fast         0W 100D 0L - win rate 0.500, differential 0.000
+champion g17-14 (generation 17) - 7 nodes, 73.8s
+  vs close-on-nearest  73W 27L - win rate 0.730, differential 0.109
+  vs hold-fast         50W 50L - win rate 0.500, differential 0.000
 ```
 
 In that run the mean rises from 0.39 to around 0.6 within a few generations, and
-the population beats the charge baseline decisively but never takes a game off
-`hold-fast`: every game against it is a draw (see below). The playoff picks a
-generation-3 leader over later ones, which is the playoff doing its job: the
-later leaders' higher per-generation scores were partly the boards they drew.
-Twenty generations of 24 genomes is a little over a minute.
+the population beats the charge baseline decisively. Against `hold-fast` it wins
+exactly half: every game it defends, none it attacks. No genome in the run breaks
+a line that stands still, so every game against `hold-fast` is called off and
+goes to whichever side was defending (see below). The champion does not branch
+on `attacking` at all. The playoff picks a generation-17 leader over the last
+generation's, which is the playoff doing its job: per-generation scores are
+partly the boards each generation drew. Twenty generations of 24 genomes is a
+little over a minute.
 
-`best`, `mean` and `worst` are scores against the fixed opponents — a win, draw or
+`best`, `mean` and `worst` are scores against the fixed opponents — a win or
 loss plus a quarter of the differential, averaged over every game — so they are
 absolute: a rising `mean` is the population improving. They are measured on that
 generation's boards, so they move with the draw of boards as well; the columns to
@@ -181,13 +196,21 @@ and its winner is the champion printed below it.
 - `close-on-nearest` — the MVP in `docs/ai-opponent.md`: wheel onto the nearest
   enemy, close the distance, then stand and fight.
 
-`hold-fast` is much the stronger of the two: over 40 mirrored scenarios,
-`close-on-nearest` wins 4, draws 5 and **loses 31**. Advancing forfeits the
-round's shooting (`docs/shooting.md`), so an army that walks across the board is
-shot at the whole way in for nothing, and it tends to arrive with a flank open to
-a line that never had to turn. Charging is a losing move in these rules as they
-stand. It is worth knowing before tuning anything: an evolved AI that draws with
-`hold-fast` has found the same equilibrium, not failed to learn.
+Neither baseline reads `attacking`; each plays the same way in both roles.
+
+`hold-fast` is much the stronger of the two: over 20 mirrored scenarios, each
+played from both sides, `close-on-nearest` wins 7 and **loses 33** — 2 of 20 as
+the attacker and only 5 of 20 as the defender, where standing still against a
+side that also stands still is always called off in the defender's favour. Advancing forfeits the round's shooting (`docs/shooting.md`), so an
+army that walks across the board is shot at the whole way in for nothing, and it
+tends to arrive with a flank open to a line that never had to turn. Charging is a
+losing move in these rules as they stand.
+
+That is also why evolution stalls at 0.500 against `hold-fast`. Defending, a
+genome wins by not attacking; attacking, it has to break a line that holds every
+advantage, and no genome has found a way. The `attacking` feature gives it the
+means to play the two roles differently, but the attacking role pays off only
+once some attack beats a static line, which the rules may not allow.
 
 ## Checkpoints, and what a run leaves behind
 
@@ -212,8 +235,10 @@ Everything but the generation count is taken from the checkpoint. Changing the
 population size or the scoring mid-run would make the curve meaningless, so those
 flags are ignored when resuming. A resumed run writes back into the run directory
 it came from, so its later checkpoints sit next to the earlier ones. Checkpoints
-written under the earlier round-robin fitness (version 1) cannot be resumed; their
-`champion.json` files still play under `ai:play`.
+written under the earlier round-robin fitness (version 1) or the scoring that
+still had draws (version 2) cannot be resumed; their `champion.json` files still
+play under `ai:play`, where a genome from before `attacking` existed simply never
+branches on it.
 
 Genomes are plain data — trees of numbers and orders — so nothing needs reviving
 on load. Everything read off disk is **validated** rather than trusted, since these

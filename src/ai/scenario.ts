@@ -36,6 +36,8 @@ const ENEMY_FACING: HexDirection = 'SW'
 export interface Scenario {
   /** Seed this scenario was drawn from, so a game can be named and replayed. */
   seed: number
+  /** The side that must break the other; a game it does not win, the defender wins. */
+  attacker: Side
   units: UnitState[]
 }
 
@@ -119,8 +121,9 @@ function unitOf(
 }
 
 /**
- * Draw a scenario: a roster size, a mix of types, and a deployment inside the
- * player's rows. The enemy gets the same list of types, mirrored.
+ * Draw a scenario: a roster size, a mix of types, a deployment inside the
+ * player's rows, and which side attacks. The enemy gets the same list of types,
+ * mirrored.
  *
  * `size` pins the roster size when the caller wants one; otherwise it is drawn.
  */
@@ -146,7 +149,10 @@ export function randomScenario(
     )
   }
 
-  return { seed: options.seed ?? 0, units }
+  // drawn last, so the roster and deployment a seed gives are unchanged
+  const attacker: Side = rng.next() < 0.5 ? 'player' : 'enemy'
+
+  return { seed: options.seed ?? 0, attacker, units }
 }
 
 /** A fresh copy of a scenario's board, so a game never mutates the scenario. */

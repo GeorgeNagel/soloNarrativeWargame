@@ -157,12 +157,13 @@ export function ordersFor(
   side: Side,
   round: number,
   roster: Roster,
+  attacker: Side,
 ): OrderBook {
-  const posture = evaluate(genome.army, armyFeatures(board, side, { round, roster }))
+  const posture = postureFor(genome, board, side, round, roster, attacker)
   const orders: OrderBook = {}
   for (const unit of board) {
     if (unit.side !== side || !isAlive(unit)) continue
-    const features = unitFeatures(unit, board, { round, posture, roster })
+    const features = unitFeatures(unit, board, { round, posture, roster, attacker })
     orders[unit.id] = legalOrder(evaluate(genome.units[unit.type], features), unit)
   }
   return orders
@@ -175,16 +176,17 @@ export function postureFor(
   side: Side,
   round: number,
   roster: Roster,
+  attacker: Side,
 ): number {
-  return evaluate(genome.army, armyFeatures(board, side, { round, roster }))
+  return evaluate(genome.army, armyFeatures(board, side, { round, roster, attacker }))
 }
 
 /** A genome as something a game can hand a side to. */
 export function commanderOf(genome: Genome): Commander {
   return {
     id: genome.id,
-    orders: (board, side, round, roster) =>
-      ordersFor(genome, board, side, round, roster),
+    orders: (board, side, round, roster, attacker) =>
+      ordersFor(genome, board, side, round, roster, attacker),
   }
 }
 

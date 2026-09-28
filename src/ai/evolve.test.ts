@@ -67,7 +67,7 @@ describe('runGauntlet', () => {
   it('plays every opponent from both sides of every board', () => {
     for (const standing of standings) {
       expect(standing.games).toBe(2 * 2 * opponents.length)
-      expect(standing.wins + standing.draws + standing.losses).toBe(standing.games)
+      expect(standing.wins + standing.losses).toBe(standing.games)
       expect(standing.against.map((mark) => mark.opponent)).toEqual(
         opponents.map((opponent) => opponent.id),
       )
@@ -239,7 +239,7 @@ describe('benchmark', () => {
     const mark = benchmark(genome, holdFast, { games: 3, seed: 4, roundCap: 8 })
     expect(mark.opponent).toBe('hold-fast')
     expect(mark.games).toBe(6)
-    expect(mark.wins + mark.draws + mark.losses).toBe(6)
-    expect(mark.winRate).toBeCloseTo((mark.wins + mark.draws / 2) / 6, 10)
+    expect(mark.wins + mark.losses).toBe(6)
+    expect(mark.winRate).toBeCloseTo(mark.wins / 6, 10)
   })
 })

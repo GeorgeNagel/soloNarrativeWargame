@@ -23,9 +23,10 @@ import type { Tree } from './tree'
 
 /**
  * Bumped when the shape below changes in a way older files cannot be read as.
- * Version 1 was the round robin, scored genome against genome.
+ * Version 1 was the round robin, scored genome against genome. Version 2 scored
+ * a called-off game as a draw.
  */
-export const CHECKPOINT_VERSION = 2
+export const CHECKPOINT_VERSION = 3
 
 /** A ranking row, pointing at the population entry of the same index. */
 export interface StandingRecord {
@@ -33,7 +34,6 @@ export interface StandingRecord {
   score: number
   games: number
   wins: number
-  draws: number
   losses: number
   differential: number
   rounds: number
@@ -130,7 +130,6 @@ export function toCheckpoint(
       score: standing.score,
       games: standing.games,
       wins: standing.wins,
-      draws: standing.draws,
       losses: standing.losses,
       differential: standing.differential,
       rounds: standing.rounds,
@@ -248,7 +247,6 @@ function parseBenchmark(value: unknown, what: string): Benchmark {
     opponent: asString(mark.opponent, `${what}.opponent`),
     games: asNumber(mark.games, `${what}.games`),
     wins: asNumber(mark.wins, `${what}.wins`),
-    draws: asNumber(mark.draws, `${what}.draws`),
     losses: asNumber(mark.losses, `${what}.losses`),
     winRate: asNumber(mark.winRate, `${what}.winRate`),
     score: asNumber(mark.score, `${what}.score`),
@@ -274,7 +272,9 @@ export function parseCheckpoint(value: unknown): Checkpoint {
       `checkpoint is version ${version}, this build reads version ${CHECKPOINT_VERSION}` +
         (version === 1
           ? ' (version 1 checkpoints come from the round-robin fitness and cannot be resumed)'
-          : ''),
+          : version === 2
+            ? ' (version 2 checkpoints scored draws, which no longer exist, and cannot be resumed)'
+            : ''),
     )
   }
   const population = asList(checkpoint.population, 'population')
@@ -321,7 +321,6 @@ export function parseCheckpoint(value: unknown): Checkpoint {
         score: asNumber(record.score, `${what}.score`),
         games: asNumber(record.games, `${what}.games`),
         wins: asNumber(record.wins, `${what}.wins`),
-        draws: asNumber(record.draws, `${what}.draws`),
         losses: asNumber(record.losses, `${what}.losses`),
         differential: asNumber(record.differential, `${what}.differential`),
         rounds: asNumber(record.rounds, `${what}.rounds`),

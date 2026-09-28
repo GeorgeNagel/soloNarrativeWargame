@@ -24,9 +24,8 @@ export interface Benchmark {
   opponent: string
   games: number
   wins: number
-  draws: number
   losses: number
-  /** Wins plus half the draws, over games — the usual win rate. */
+  /** Wins over games. */
   winRate: number
   /** Mean score per game, as `scoreFor` counts it. */
   score: number
@@ -41,7 +40,6 @@ export interface Standing {
   score: number
   games: number
   wins: number
-  draws: number
   losses: number
   /** Mean surviving-strength differential, from this genome's point of view. */
   differential: number
@@ -62,14 +60,13 @@ interface Tally {
   score: number
   games: number
   wins: number
-  draws: number
   losses: number
   differential: number
   rounds: number
 }
 
 function emptyTally(): Tally {
-  return { score: 0, games: 0, wins: 0, draws: 0, losses: 0, differential: 0, rounds: 0 }
+  return { score: 0, games: 0, wins: 0, losses: 0, differential: 0, rounds: 0 }
 }
 
 function credit(tally: Tally, outcome: GameOutcome, side: Side): void {
@@ -78,8 +75,7 @@ function credit(tally: Tally, outcome: GameOutcome, side: Side): void {
   tally.rounds += outcome.rounds
   tally.differential +=
     side === 'player' ? outcome.differential : -outcome.differential
-  if (outcome.winner === null) tally.draws += 1
-  else if (outcome.winner === side) tally.wins += 1
+  if (outcome.winner === side) tally.wins += 1
   else tally.losses += 1
 }
 
@@ -117,9 +113,8 @@ export function benchmark(
     opponent: opponent.id,
     games: tally.games,
     wins: tally.wins,
-    draws: tally.draws,
     losses: tally.losses,
-    winRate: per(tally.wins + tally.draws / 2),
+    winRate: per(tally.wins),
     score: per(tally.score),
     differential: per(tally.differential),
     rounds: per(tally.rounds),
@@ -140,7 +135,6 @@ function standingOf(genome: Genome, against: Benchmark[]): Standing {
     score: sum('score'),
     games,
     wins: against.reduce((total, mark) => total + mark.wins, 0),
-    draws: against.reduce((total, mark) => total + mark.draws, 0),
     losses: against.reduce((total, mark) => total + mark.losses, 0),
     differential: sum('differential'),
     rounds: sum('rounds'),

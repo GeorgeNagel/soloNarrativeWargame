@@ -17,7 +17,7 @@ import type { Scenario } from './scenario'
 import { seededD6 } from './rng'
 import type { Rng } from './rng'
 
-/** Rounds a game runs before it is called off as a draw. */
+/** Rounds a game runs before it is called off, and the defender wins. */
 export const DEFAULT_ROUND_CAP = 30
 
 /**
@@ -33,8 +33,14 @@ export const DIFFERENTIAL_WEIGHT = 0.25
 export interface GameOutcome {
   /** Rounds actually resolved. */
   rounds: number
-  /** The side that broke the other, or null for a draw. */
-  winner: Side | null
+  /**
+   * The side that broke the other. There are no draws: a game the attacker does
+   * not win outright — called off, or both sides wiped at once — goes to the
+   * defender.
+   */
+  winner: Side
+  /** The scenario's attacker. */
+  attacker: Side
   /** Surviving strength each side kept, as a fraction of what it deployed. */
   strength: Record<Side, number>
   /** `strength.player - strength.enemy`, in [-1, 1]. */
@@ -98,8 +104,8 @@ export function playGame(
 
     const before = positionsOf(board)
     const orders = {
-      ...player.orders(board, 'player', round, roster),
-      ...enemy.orders(board, 'enemy', round, roster),
+      ...player.orders(board, 'player', round, roster, scenario.attacker),
+      ...enemy.orders(board, 'enemy', round, roster, scenario.attacker),
     }
     const result = resolveRound(board, orders, roll)
     options.onRound?.({ round, before: board, orders, result })
@@ -123,14 +129,15 @@ export function playGame(
     player: strengthOf(board, 'player', roster.player),
     enemy: strengthOf(board, 'enemy', roster.enemy),
   }
-  const playerAlive = livingCount(board, 'player') > 0
-  const enemyAlive = livingCount(board, 'enemy') > 0
-  const winner: Side | null =
-    playerAlive && !enemyAlive ? 'player' : enemyAlive && !playerAlive ? 'enemy' : null
+  const { attacker } = scenario
+  const defender: Side = attacker === 'player' ? 'enemy' : 'player'
+  const attackerBroke =
+    livingCount(board, attacker) > 0 && livingCount(board, defender) === 0
 
   return {
     rounds,
-    winner,
+    winner: attackerBroke ? attacker : defender,
+    attacker,
     strength,
     differential: strength.player - strength.enemy,
     timedOut,
@@ -139,16 +146,16 @@ export function playGame(
 }
 
 /**
- * One side's score for a game: a win, draw or loss, plus a slice of the
+ * One side's score for a game: a win or loss, plus a slice of the
  * surviving-strength differential.
  *
  * The differential is what gives selection a gradient in the first generations,
- * when almost every game is a draw and pure win rate would rank at random. A
- * game stopped by the round cap is a draw, so the differential is the only thing
- * that separates two armies that never broke each other.
+ * when almost every game is called off and pure win rate would rank a population
+ * by who happened to defend. It separates two genomes that both held, or both
+ * failed to break through, by how much each kept.
  */
 export function scoreFor(outcome: GameOutcome, side: Side): number {
-  const result = outcome.winner === null ? 0.5 : outcome.winner === side ? 1 : 0
+  const result = outcome.winner === side ? 1 : 0
   const differential =
     side === 'player' ? outcome.differential : -outcome.differential
   return result + DIFFERENTIAL_WEIGHT * differential

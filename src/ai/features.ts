@@ -59,6 +59,8 @@ export const UNIT_FEATURE_SPECS: readonly FeatureSpec[] = [
   // it is a channel the two levels of the genome may learn to agree on
   spec('posture', 0, POSTURE_COUNT - 1),
   spec('round', 1, 30),
+  // 1 when this side must break the other to win, 0 when holding is enough
+  spec('attacking', 0, 1),
   // this unit
   spec('ownDamage', 0, 1, 0.1),
   spec('allowance', 2, 4),
@@ -93,6 +95,7 @@ export const UNIT_FEATURE_SPECS: readonly FeatureSpec[] = [
 /** Army-level features, read once a round to pick the posture. */
 export const ARMY_FEATURE_SPECS: readonly FeatureSpec[] = [
   spec('round', 1, 30),
+  spec('attacking', 0, 1),
   spec('friendsAlive', 1, 10),
   spec('foesAlive', 1, 10),
   spec('ownStrength', 0, 1, 0.1),
@@ -195,6 +198,8 @@ export interface FeatureContext {
   posture: number
   /** How many units each side deployed, for the strength fractions. */
   roster: Record<Side, number>
+  /** The side that must break the other to win. */
+  attacker: Side
 }
 
 // ── the feature vectors ───────────────────────────────────
@@ -257,6 +262,7 @@ export function unitFeatures(
   return {
     posture: ctx.posture,
     round: ctx.round,
+    attacking: unit.side === ctx.attacker ? 1 : 0,
     ownDamage: unit.hits / HITS_TO_ELIMINATE,
     allowance: movementOf(unit),
     canShoot: canShoot(unit) ? 1 : 0,
@@ -325,6 +331,7 @@ export function armyFeatures(
 
   return {
     round: ctx.round,
+    attacking: side === ctx.attacker ? 1 : 0,
     friendsAlive: own.length,
     foesAlive: foes.length,
     ownStrength: strengthOf(board, side, ctx.roster[side]),

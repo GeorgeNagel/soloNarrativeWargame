@@ -102,6 +102,13 @@ describe('randomScenario', () => {
     }
   })
 
+  it('draws either side as the attacker', () => {
+    const attackers = new Set(
+      Array.from({ length: 40 }, (_, seed) => randomScenario(makeRng(seed)).attacker),
+    )
+    expect(attackers).toEqual(new Set(['player', 'enemy']))
+  })
+
   it('points each side at the other', () => {
     const { units } = randomScenario(makeRng(3))
     for (const unit of units) {

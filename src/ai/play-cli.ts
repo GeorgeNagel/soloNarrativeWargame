@@ -40,7 +40,7 @@ const USAGE = `Usage: npm run ai:play -- --genome PATH [flags]
                  name | a path to another genome (default ${BASELINES[0].id})
   --games N      scenarios to measure, each played from both sides (default 20)
   --seed N       seed for the scenarios and the dice (default 7)
-  --cap N        rounds before a game is a draw (default ${DEFAULT_ROUND_CAP})
+  --cap N        rounds before a game goes to the defender (default ${DEFAULT_ROUND_CAP})
   --size N       pin the roster size instead of drawing it
   --trace        print one game round by round
   --describe     print the genome's trees
@@ -196,7 +196,7 @@ function main(): void {
     const roster = rosterOf(scenario.units)
     say(
       `tracing one game: ${genome.id} (player) against ${opponent.id} (enemy), ` +
-        `${roster.player} units a side, scenario seed ${seed}`,
+        `${roster.player} units a side, ${scenario.attacker} attacking, scenario seed ${seed}`,
     )
     const outcome = playGame(
       commanderOf(genome),
@@ -207,7 +207,14 @@ function main(): void {
         roundCap: flags.cap,
         onRound: (trace) => {
           const postures = {
-            player: postureFor(genome, trace.before, 'player', trace.round, roster),
+            player: postureFor(
+              genome,
+              trace.before,
+              'player',
+              trace.round,
+              roster,
+              scenario.attacker,
+            ),
             // a baseline has no posture of its own; showing the subject's read of
             // the enemy side would be a lie, so it is left at zero
             enemy: 0,
@@ -217,7 +224,8 @@ function main(): void {
       },
     )
     say(
-      `result: ${outcome.winner ?? 'draw'} after ${outcome.rounds} rounds — ` +
+      `result: ${outcome.winner} after ${outcome.rounds} rounds` +
+        `${outcome.winner === outcome.attacker ? '' : ' (held)'} — ` +
         `strength ${num(outcome.strength.player)} vs ${num(outcome.strength.enemy)}`,
     )
     say('')
@@ -233,7 +241,7 @@ function main(): void {
       `(${flags.games} scenarios, both sides each)`,
   )
   say(
-    `  ${mark.wins}W ${mark.draws}D ${mark.losses}L — win rate ${num(mark.winRate)}, ` +
+    `  ${mark.wins}W ${mark.losses}L — win rate ${num(mark.winRate)}, ` +
       `differential ${num(mark.differential)}`,
   )
 }

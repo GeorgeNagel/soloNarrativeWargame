@@ -13,6 +13,13 @@ export interface Commander {
   /**
    * This side's whole order book for the round. Only this side's living units
    * belong in it, so two commanders' books merge into the one a round takes.
+   * `attacker` is the side that must break the other to win.
    */
-  orders(board: UnitState[], side: Side, round: number, roster: Roster): OrderBook
+  orders(
+    board: UnitState[],
+    side: Side,
+    round: number,
+    roster: Roster,
+    attacker: Side,
+  ): OrderBook
 }

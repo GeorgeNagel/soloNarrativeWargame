@@ -58,7 +58,7 @@ const USAGE = `Usage: npm run evolve -- [flags]
   --depth N        maximum tree depth (default ${DEFAULTS.maxDepth})
   --mutation P     per-node mutation chance (default ${DEFAULTS.mutationRate})
   --elites N       top genomes carried over untouched (default ${DEFAULTS.elites})
-  --cap N          rounds before a game is a draw (default ${DEFAULTS.roundCap})
+  --cap N          rounds before a game goes to the defender (default ${DEFAULTS.roundCap})
   --playoff N      boards in the final playoff between generation leaders (default ${DEFAULTS.playoffGames})
   --out-dir DIR    where runs and saved opponents live (default artifacts)
   --run-id NAME    names this run's directory (default from the settings)
@@ -208,7 +208,7 @@ function summary(standing: Standing): string[] {
   const width = Math.max(...standing.against.map((mark) => mark.opponent.length))
   return standing.against.map(
     (mark) =>
-      `vs ${pad(mark.opponent, width)}  ${mark.wins}W ${mark.draws}D ${mark.losses}L ` +
+      `vs ${pad(mark.opponent, width)}  ${mark.wins}W ${mark.losses}L ` +
       `- win rate ${num(mark.winRate)}, differential ${num(mark.differential)}`,
   )
 }
@@ -220,7 +220,7 @@ function playoffTable(playoff: Standing[]): string[] {
     (standing, index) =>
       `  ${pad(`${index + 1}`, 3)} ${pad(standing.genome.id, 10)} ` +
       `${pad(`gen ${standing.genome.generation}`, 8)} score ${num(standing.score)}  ` +
-      `${standing.wins}W ${standing.draws}D ${standing.losses}L`,
+      `${standing.wins}W ${standing.losses}L`,
   )
   const rest = playoff.length - PLAYOFF_SHOWN
   return rest > 0 ? [...rows, `  ... and ${rest} more`] : rows
@@ -387,7 +387,6 @@ async function main(): Promise<void> {
     generation: standing.genome.generation,
     score: standing.score,
     wins: standing.wins,
-    draws: standing.draws,
     losses: standing.losses,
     differential: standing.differential,
     against: standing.against,

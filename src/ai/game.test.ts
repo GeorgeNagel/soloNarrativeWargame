@@ -38,18 +38,15 @@ describe('playGame', () => {
     expect(once).toEqual(twice)
   })
 
-  it('never leaves both sides standing when it names a winner', () => {
+  it('gives the attacker a win only when it broke the defender', () => {
     for (let seed = 0; seed < 30; seed += 1) {
-      const outcome = playGame(
-        closeOnNearest,
-        closeOnNearest,
-        scenarioFor(seed),
-        makeRng(seed),
-      )
-      if (outcome.winner !== null) {
-        expect(outcome.strength[outcome.winner]).toBeGreaterThan(0)
-        const loser = outcome.winner === 'player' ? 'enemy' : 'player'
-        expect(outcome.strength[loser]).toBe(0)
+      const scenario = scenarioFor(seed)
+      const outcome = playGame(closeOnNearest, closeOnNearest, scenario, makeRng(seed))
+      expect(outcome.attacker).toBe(scenario.attacker)
+      if (outcome.winner === outcome.attacker) {
+        const defender = outcome.attacker === 'player' ? 'enemy' : 'player'
+        expect(outcome.strength[outcome.attacker]).toBeGreaterThan(0)
+        expect(outcome.strength[defender]).toBe(0)
       }
     }
   })
@@ -79,6 +76,15 @@ describe('playGame', () => {
     expect(outcome.rounds).toBeLessThan(DEFAULT_ROUND_CAP)
   })
 
+  it('gives a called-off game to the defender, whichever side attacks', () => {
+    for (const attacker of ['player', 'enemy'] as const) {
+      const scenario = { ...scenarioFor(6), attacker }
+      const outcome = playGame(holdFast, holdFast, scenario, makeRng(6))
+      expect(outcome.timedOut).toBe(true)
+      expect(outcome.winner).toBe(attacker === 'player' ? 'enemy' : 'player')
+    }
+  })
+
   it('honours a shorter round cap', () => {
     const outcome = playGame(
       closeOnNearest,
@@ -105,6 +111,7 @@ describe('scoreFor', () => {
     return {
       rounds: 5,
       winner,
+      attacker: 'player',
       strength: { player: 0, enemy: 0 },
       differential,
       timedOut: false,
@@ -113,7 +120,7 @@ describe('scoreFor', () => {
   }
 
   it('splits exactly one point between the two sides of a game', () => {
-    for (const winner of ['player', 'enemy', null] as const) {
+    for (const winner of ['player', 'enemy'] as const) {
       for (const differential of [-1, -0.25, 0, 0.5, 1]) {
         const game = outcome(winner, differential)
         expect(scoreFor(game, 'player') + scoreFor(game, 'enemy')).toBeCloseTo(1, 10)
@@ -121,18 +128,15 @@ describe('scoreFor', () => {
     }
   })
 
-  it('pays a win more than a draw and a draw more than a loss', () => {
-    expect(scoreFor(outcome('player', 0), 'player')).toBeGreaterThan(
-      scoreFor(outcome(null, 0), 'player'),
-    )
-    expect(scoreFor(outcome(null, 0), 'player')).toBeGreaterThan(
-      scoreFor(outcome('enemy', 0), 'player'),
+  it('pays a win more than a loss, whatever the differential', () => {
+    expect(scoreFor(outcome('player', -1), 'player')).toBeGreaterThan(
+      scoreFor(outcome('enemy', 1), 'player'),
     )
   })
 
-  it('separates two draws by the strength each side kept', () => {
-    expect(scoreFor(outcome(null, 0.5), 'player')).toBeGreaterThan(
-      scoreFor(outcome(null, -0.5), 'player'),
+  it('separates two losses by the strength each side kept', () => {
+    expect(scoreFor(outcome('enemy', 0.5), 'player')).toBeGreaterThan(
+      scoreFor(outcome('enemy', -0.5), 'player'),
     )
   })
 })
@@ -166,9 +170,9 @@ describe('the orders a commander writes', () => {
       const genome = randomGenome('g', makeRng(seedFrom(seed, 3)))
       for (const side of ['player', 'enemy'] as const) {
         const books = [
-          ordersFor(genome, board, side, 1, roster),
-          closeOnNearest.orders(board, side, 1, roster),
-          holdFast.orders(board, side, 1, roster),
+          ordersFor(genome, board, side, 1, roster, 'player'),
+          closeOnNearest.orders(board, side, 1, roster, 'player'),
+          holdFast.orders(board, side, 1, roster, 'player'),
         ]
         for (const book of books) {
           legal(book as Record<string, unknown>, board)
