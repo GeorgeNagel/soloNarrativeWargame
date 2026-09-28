@@ -150,8 +150,15 @@ terminal nothing is saved unless `--save-as NAME` was passed. The file holds the
 genome, the run it came from, and its playoff results.
 
 Every later run plays it, so each champion kept makes the set the next one has to
-beat harder. `npm run ai:play -- --vs NAME` plays against one by name. To retire
-one, delete its file.
+beat harder. `--vs` narrows a run to the opponents it names, so a champion can be
+bred to beat one of them in particular:
+
+```
+npm run evolve -- --vs hold-fast --gens 40 --save-as hold-fast-hunter
+```
+
+`npm run ai:play -- --vs NAME` plays against one by name. To retire one, delete
+its file.
 
 A child is bred **tree by tree**: each of the five trees is crossed over with its
 counterpart on its own — a subtree of one parent's cavalry tree replaces the
@@ -372,6 +379,7 @@ ones that matter most:
 | `--every` | 10 | checkpoint interval; 0 writes only the last |
 | `--resume` | — | carry on from a checkpoint |
 | `--save-as` | — | save the champion under this name without asking |
+| `--vs` | every opponent | play only these opponents, comma-separated; not with `--resume` |
 | `--out-dir` | `artifacts` | where runs and saved opponents live |
 | `--run-id` | from the settings | names this run's directory; breeding settings that differ from the defaults are included |
 

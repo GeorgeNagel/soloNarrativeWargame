@@ -34,6 +34,7 @@ import type {
 import { genomeSize } from './genome'
 import type { Genome } from './genome'
 import { allOpponents, nameProblem, saveOpponent } from './saved-opponents'
+import type { Opponent } from './opponents'
 import type { Standing } from './tournament'
 import type { MutationWeights } from './tree'
 
@@ -62,6 +63,8 @@ interface Flags {
   checkpointEvery: number
   resume: string | null
   saveAs: string | null
+  /** Opponent names to play, or null for every baseline and saved opponent. */
+  vs: string[] | null
   quiet: boolean
 }
 
@@ -113,6 +116,8 @@ const USAGE = `Usage: npm run evolve -- [flags]
   --every N        write a checkpoint every N generations, 0 for the last only (default 10)
   --resume PATH    carry on from a checkpoint, up to --gens
   --save-as NAME   save the champion as a named opponent without asking
+  --vs NAMES       play only these opponents, comma-separated baseline or saved
+                   names (default: every baseline and saved opponent)
   --quiet          only print the final report
 `
 
@@ -164,6 +169,7 @@ function parseFlags(argv: string[]): Flags {
     checkpointEvery: 10,
     resume: null,
     saveAs: null,
+    vs: null,
     quiet: false,
   }
 
@@ -256,6 +262,9 @@ function parseFlags(argv: string[]): Flags {
       case '--save-as':
         flags.saveAs = value
         break
+      case '--vs':
+        flags.vs = value.split(',').map((name) => name.trim())
+        break
       default:
         throw new Error(`unknown flag ${flag}\n\n${USAGE}`)
     }
@@ -269,7 +278,7 @@ function parseFlags(argv: string[]): Flags {
  * Breeding settings appear only when they differ from the defaults, so two runs
  * that differ only in how they breed do not share a directory.
  */
-function defaultRunId(options: ResolvedOptions): string {
+function defaultRunId(options: ResolvedOptions, vs: string[] | null): string {
   const parts = [
     `pop${options.populationSize}`,
     `gen${options.generations}`,
@@ -304,6 +313,7 @@ function defaultRunId(options: ResolvedOptions): string {
     parts.push(`surv${options.survivorFraction}`)
   }
   if (options.tournamentSize !== DEFAULTS.tournamentSize) parts.push(`tour${options.tournamentSize}`)
+  if (vs) parts.push(`vs-${options.opponents.map((opponent) => opponent.id).join('-')}`)
   parts.push(`seed${options.seed}`)
   return parts.join('-')
 }
@@ -526,6 +536,24 @@ function reportRun(
   say(`\nwrote ${paths.root}/`)
 }
 
+/** The opponents `--vs` names, in the order named, or all of them without it. */
+function pickOpponents(all: Opponent[], names: string[] | null): Opponent[] {
+  if (names === null) return all
+  if (names.length === 0 || names.some((name) => name === '')) {
+    throw new Error('--vs: expected one or more comma-separated opponent names')
+  }
+  return [...new Set(names)].map((name) => {
+    const found = all.find((opponent) => opponent.id === name)
+    if (!found) {
+      throw new Error(
+        `--vs: unknown opponent "${name}"; expected one of ` +
+          all.map((opponent) => opponent.id).join(', '),
+      )
+    }
+    return found
+  })
+}
+
 async function main(): Promise<void> {
   const flags = parseFlags(process.argv.slice(2))
   const say = (text: string) => process.stdout.write(`${text}\n`)
@@ -534,6 +562,10 @@ async function main(): Promise<void> {
   if (flags.saveAs !== null) {
     const problem = nameProblem(flags.outDir, flags.saveAs)
     if (problem) throw new Error(`--save-as ${flags.saveAs}: ${problem}`)
+  }
+
+  if (flags.vs && flags.resume) {
+    throw new Error('--vs cannot be used with --resume; the checkpoint names its opponents')
   }
 
   let from: RunState | undefined
@@ -582,9 +614,9 @@ async function main(): Promise<void> {
     tournamentSize: flags.tournament,
     elites: flags.elites,
     playoffGames: flags.playoff,
-    opponents: allOpponents(flags.outDir),
+    opponents: pickOpponents(allOpponents(flags.outDir), flags.vs),
   })
-  const runId = flags.runId ?? resumedId ?? defaultRunId(settled)
+  const runId = flags.runId ?? resumedId ?? defaultRunId(settled, flags.vs)
   const paths = runPaths(flags.outDir, runId)
 
   if (!flags.quiet) {
