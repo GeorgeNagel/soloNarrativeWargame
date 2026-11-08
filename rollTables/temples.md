@@ -31,9 +31,22 @@ Sites are seamless, beyond human construction: landforms made whole from stone o
 
 | d6 | Built to |
 |----|----------|
-| 1–2 | Channel magical energy (to be written) |
+| 1–2 | Channel magical energy |
 | 3–4 | Channel natural energy |
 | 5–6 | Receive worship |
+
+### Magic: What Did It Do to the Energy? (d8)
+
+| d8 | Verb |
+|----|------|
+| 1 | Focus |
+| 2 | Amplify |
+| 3 | Gather |
+| 4 | Resonate |
+| 5 | Drain |
+| 6 | Store |
+| 7 | Direct |
+| 8 | Bind |
 
 ### Natural Energy: Which Force? (d6)
 
