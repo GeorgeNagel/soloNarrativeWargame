@@ -25,6 +25,8 @@ Roll **Founded** first, then follow the tables for that era.
 
 ## Old Ones
 
+Sites are seamless, beyond human construction: landforms made whole from stone or otherworldly material.
+
 ### Form (d6)
 
 | d6 | Form |
@@ -40,12 +42,12 @@ Roll **Founded** first, then follow the tables for that era.
 
 | d6 | Material |
 |----|----------|
-| 1 | Seamless black stone |
-| 2 | Stone warm to the touch |
-| 3 | Petrified flesh |
-| 4 | Glassy fused earth |
-| 5 | Bone of something huge |
-| 6 | Metal no smith can work |
+| 1 | Single seamless granite monolith |
+| 2 | Basalt columns, too regular |
+| 3 | Crystal mass the size of a hill |
+| 4 | Solid obsidian block |
+| 5 | Whole jade outcrop |
+| 6 | Solid mass of meteoric iron |
 
 ### The Old One Here Is (d6)
 
