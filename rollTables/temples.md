@@ -36,6 +36,17 @@ Roll **Founded** first, then follow the tables for that era.
 | 5 | Ring of petrified giants |
 | 6 | Valley whose shape is the shrine |
 
+### Material (d6)
+
+| d6 | Material |
+|----|----------|
+| 1 | Seamless black stone |
+| 2 | Stone warm to the touch |
+| 3 | Petrified flesh |
+| 4 | Glassy fused earth |
+| 5 | Bone of something huge |
+| 6 | Metal no smith can work |
+
 ### The Old One Here Is (d6)
 
 | d6 | State |
@@ -62,6 +73,19 @@ Roll **Founded** first, then follow the tables for that era.
 | 9 | Tower raised to lift smoke to the sky |
 | 10 | Bone pit beneath a stone table |
 
+### Material (d8)
+
+| d8 | Material |
+|----|----------|
+| 1 | Rough fieldstone |
+| 2 | Timber posts |
+| 3 | Turf and earth |
+| 4 | Wattle and daub |
+| 5 | Bone and antler |
+| 6 | Hide over poles |
+| 7 | Reed and thatch |
+| 8 | Soot-caked rock |
+
 ## First Civilizations
 
 ### Form (d10)
@@ -78,6 +102,19 @@ Roll **Founded** first, then follow the tables for that era.
 | 8 | Observatory tower |
 | 9 | Sunken water temple |
 | 10 | Mountain-carved monastery |
+
+### Material (d8)
+
+| d8 | Material |
+|----|----------|
+| 1 | Dressed limestone |
+| 2 | Marble |
+| 3 | Basalt blocks |
+| 4 | Fired brick |
+| 5 | Glazed tile |
+| 6 | Cedar beams |
+| 7 | Bronze fittings |
+| 8 | Gilded stone |
 
 ### Cataclysm Condition (d6)
 
@@ -130,19 +167,15 @@ Mongolian/steppe-inspired culture.
 | 19 | Lake-shore offering stones |
 | 20 | Ruined city of an older people |
 
-## Material (d10)
+### Material (d8)
 
-Any era. Reroll or explain odd pairings.
-
-| d10 | Material |
-|-----|----------|
-| 1 | Rough fieldstone |
-| 2 | Dressed stone |
-| 3 | Timber |
-| 4 | Mudbrick |
-| 5 | Turf and earth |
-| 6 | Reed and thatch |
-| 7 | Bone |
-| 8 | Fired clay tile |
-| 9 | Ruins of an older people |
-| 10 | Roll twice, combine |
+| d8 | Material |
+|----|----------|
+| 1 | Felt |
+| 2 | Horsehair |
+| 3 | Birch poles |
+| 4 | Piled stones |
+| 5 | Bone |
+| 6 | Rawhide |
+| 7 | Dyed wool cloth |
+| 8 | Captured foreign stone |
