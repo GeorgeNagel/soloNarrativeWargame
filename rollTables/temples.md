@@ -33,7 +33,7 @@ Sites are seamless, beyond human construction: landforms made whole from stone o
 |----|----------|
 | 1–2 | Channel magical energy (to be written) |
 | 3–4 | Channel natural energy |
-| 5–6 | Receive worship (to be written) |
+| 5–6 | Receive worship |
 
 ### Natural Energy: Which Force? (d6)
 
@@ -60,6 +60,19 @@ Sites are seamless, beyond human construction: landforms made whole from stone o
 | 8 | Siphon |
 | 9 | Regulate |
 | 10 | Transform |
+
+### Worship: How Did It Receive Offerings? (d8)
+
+| d8 | Verb |
+|----|------|
+| 1 | Purify |
+| 2 | Transmit |
+| 3 | Compel |
+| 4 | Hoard |
+| 5 | Transform |
+| 6 | Burn |
+| 7 | Bleed |
+| 8 | Bury |
 
 ### Material (d6)
 
