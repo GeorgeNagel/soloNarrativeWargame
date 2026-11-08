@@ -27,16 +27,39 @@ Roll **Founded** first, then follow the tables for that era.
 
 Sites are seamless, beyond human construction: landforms made whole from stone or otherworldly material.
 
-### Form (d6)
+### Purpose (d6)
 
-| d6 | Form |
-|----|------|
-| 1 | Too-large stone circle, seamless stones |
-| 2 | Mound that breathes in winter |
-| 3 | Black pillar the grass won't touch |
-| 4 | Pit with steps leading down |
-| 5 | Ring of petrified giants |
-| 6 | Valley whose shape is the shrine |
+| d6 | Built to |
+|----|----------|
+| 1–2 | Channel magical energy (to be written) |
+| 3–4 | Channel natural energy |
+| 5–6 | Receive worship (to be written) |
+
+### Natural Energy: Which Force? (d6)
+
+| d6 | Force |
+|----|-------|
+| 1 | Magma |
+| 2 | Tides |
+| 3 | Lightning |
+| 4 | Wind |
+| 5 | Earthquake |
+| 6 | River |
+
+### Natural Energy: What Did It Do to the Force? (d10)
+
+| d10 | Verb |
+|-----|------|
+| 1 | Harness |
+| 2 | Contain |
+| 3 | Redirect |
+| 4 | Amplify |
+| 5 | Store |
+| 6 | Concentrate |
+| 7 | Unleash |
+| 8 | Siphon |
+| 9 | Regulate |
+| 10 | Transform |
 
 ### Material (d6)
 
